@@ -114,3 +114,16 @@ def test_a_basis_is_written_as_spant_reads_it(tmp_path):
     assert float(seen['BADELT'][0].rstrip(',')) == 1 / float(naa['sw'])
     assert seen['FMTBAS'][0] == "'(6E13.5)',"
     assert seen['ID'] == [f"'{naa['name']}',", "'Cr',"]
+
+
+def test_a_basis_is_written_in_the_fixed_columns_lcmodel_reads(tmp_path):
+    """FMTBAS (6E13.5) is a Fortran format: six fields of exactly 13 characters, no
+    separator; LCModel reads a line with blanks between values as shifted numbers."""
+    naa = read_jmrui_file(os.path.join(SAMPLES, 'JMRUI', 'NAA.txt'))
+    out = str(tmp_path / 'naa.BASIS')
+    write_lcmodel_basis([naa], out)
+
+    data = open(out).read().split('$END')[-1].splitlines()[1:]
+    assert all(len(line) % 13 == 0 and len(line) <= 78 for line in data)
+    columns = [float(line[i:i + 13]) for line in data for i in range(0, len(line), 13)]
+    assert columns == [float(v) for line in data for v in line.split()]
