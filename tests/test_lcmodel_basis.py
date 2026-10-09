@@ -89,3 +89,28 @@ def test_a_basis_stating_another_centre_keeps_its_peaks_where_they_are(tmp_path)
     write_lcmodel_raw(moved, str(tmp_path / 'naa.raw'))
     raw = read_lcmodel_raw(str(tmp_path / 'naa.raw'))
     assert round(_peak_ppm(raw, 4.65), 2) == round(_peak_ppm(naa, 4.65), 2)
+
+
+def _as_spant_reads(path):
+    """The header values spant's read_basis takes (R/basis_set.R): the third blank-separated
+    word of a line that starts with ' KEY = '; NDATAB's must be a bare integer."""
+    values = {}
+    with open(path) as f:
+        for line in f:
+            for key in ('NDATAB', 'HZPPPM', 'BADELT', 'FMTBAS', 'ID'):
+                if line.startswith(f' {key} = '):
+                    values.setdefault(key, []).append(line.split()[2])
+    return values
+
+
+def test_a_basis_is_written_as_spant_reads_it(tmp_path):
+    naa = read_jmrui_file(os.path.join(SAMPLES, 'JMRUI', 'NAA.txt'))
+    out = str(tmp_path / 'two.BASIS')
+    write_lcmodel_basis([naa, dict(naa, name='Cr')], out)
+
+    seen = _as_spant_reads(out)
+    assert int(seen['NDATAB'][0]) == 2 * len(naa['fid'])   # zero-filled, as MakeBasis
+    assert float(seen['HZPPPM'][0].rstrip(',')) == float(naa['sf'])
+    assert float(seen['BADELT'][0].rstrip(',')) == 1 / float(naa['sw'])
+    assert seen['FMTBAS'][0] == "'(6E13.5)',"
+    assert seen['ID'] == [f"'{naa['name']}',", "'Cr',"]

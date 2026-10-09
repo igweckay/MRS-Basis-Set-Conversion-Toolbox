@@ -237,19 +237,19 @@ def write_lcmodel_basis(basis_list, outpath,
 
         ######################## $SEQPAR block #######################
         f.write(" $SEQPAR\n")
-        f.write(f" FWHMBA=  {linewidth:.8E},\n")
-        f.write(f" HZPPPM=  {sf:.6f}    ,\n")
-        f.write(f" ECHOT=  {te_val:.7f}    ,\n")
-        f.write(f" SEQ='{seq[:6]}',\n")   # LCModel truncates to 6 chars
+        f.write(f" FWHMBA = {linewidth:.8E},\n")
+        f.write(f" HZPPPM = {sf:.6f},\n")
+        f.write(f" ECHOT = {te_val:.7f},\n")
+        f.write(f" SEQ = '{seq[:6]}',\n")   # LCModel truncates to 6 chars
         f.write(" \n")
         f.write(" $END\n")
 
         ######################## $BASIS1 block #######################
         f.write(" $BASIS1\n")
-        f.write(f" IDBASI='{description[:80]}',\n")
-        f.write(" FMTBAS='(6E13.5)                                                                        ',\n")
-        f.write(f" BADELT=  {dwell:.8E},\n")
-        f.write(f" NDATAB=       {2 * n},\n")   # zero-filled to 2n, as MakeBasis
+        f.write(f" IDBASI = '{description[:80]}',\n")
+        f.write(" FMTBAS = '(6E13.5)',\n")
+        f.write(f" BADELT = {dwell:.8E},\n")
+        f.write(f" NDATAB = {2 * n}\n")   # zero-filled to 2n, as MakeBasis
         f.write(" \n")
         f.write(" $END\n")
 
@@ -302,12 +302,12 @@ def write_lcmodel_basis(basis_list, outpath,
 
             # $BASIS block
             f.write(" $BASIS\n")
-            f.write(f" ID='{name}',\n")
-            f.write(f" METABO='{name[:6]:<6}',\n")   # LCModel truncates to 6
-            f.write(" CONC=  1.00000000    ,\n")
-            f.write(" TRAMP=  1.00000000    ,\n")
-            f.write(" VOLUME=  1.00000000    ,\n")
-            f.write(" ISHIFT=          0,\n")
+            f.write(f" ID = '{name}',\n")
+            f.write(f" METABO = '{name[:6]:<6}',\n")   # LCModel truncates to 6
+            f.write(" CONC = 1.00000000,\n")
+            f.write(" TRAMP = 1.00000000,\n")
+            f.write(" VOLUME = 1.00000000,\n")
+            f.write(" ISHIFT = 0,\n")
             f.write(" \n")
             f.write(" $END\n")
 
