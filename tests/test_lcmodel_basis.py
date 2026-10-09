@@ -51,3 +51,15 @@ def test_a_basis_survives_a_round_trip(tmp_path):
     # equal to print precision (6E13.5): the zero-filled half's rounding moves last digits
     for a, b in zip(read_lcmodel_basis(first), read_lcmodel_basis(second)):
         assert np.linalg.norm(a['fid'] - b['fid']) < 1e-5 * np.linalg.norm(a['fid'])
+
+
+def test_a_basis_is_read_by_its_detected_format_without_the_gui():
+    from core.detect import detect_format
+    from core.load import load_basis
+
+    files = [os.path.join(SAMPLES, 'JMRUI', name) for name in ('NAA.txt', 'Cr391.txt')]
+    found = detect_format(files)
+    basis = load_basis(files, found['format'])
+
+    assert 'jMRUI' in found['format'] and [m['name'] for m in basis] == ['NAA', 'Cr391']
+    assert 'tkinter' not in sys.modules
