@@ -63,3 +63,29 @@ def test_a_basis_is_read_by_its_detected_format_without_the_gui():
 
     assert 'jMRUI' in found['format'] and [m['name'] for m in basis] == ['NAA', 'Cr391']
     assert 'tkinter' not in sys.modules
+
+
+def _peak_ppm(core, centre):
+    fid = np.asarray(core['fid']).ravel()
+    freq = np.fft.fftshift(np.fft.fftfreq(len(fid), 1 / core['sw']))
+    return centre + freq[np.argmax(np.abs(np.fft.fftshift(np.fft.fft(fid))))] / core['sf']
+
+
+def test_a_basis_stating_another_centre_keeps_its_peaks_where_they_are(tmp_path):
+    """Osprey's own basis sets put 3.0 ppm at 0 Hz; LCModel's is written for 4.65."""
+    naa = read_jmrui_file(os.path.join(SAMPLES, 'JMRUI', 'NAA.txt'))      # NAA at 2.01
+    moved = dict(naa, fid=naa['fid'] * np.exp(2j * np.pi * 1.65 * naa['sf']
+                                                 * np.arange(len(naa['fid'])) / naa['sw']),
+                 centerFreq=3.0)                                       # the same, at 3.0
+    out = str(tmp_path / 'naa.BASIS')
+    write_lcmodel_basis([moved, dict(naa, name='same')], out)
+
+    back = read_lcmodel_basis(out)
+
+    assert abs(_peak_ppm(moved, 3.0) - _peak_ppm(naa, 4.65)) < 0.01
+    assert [round(_peak_ppm(b, 4.65), 2) for b in back] == [round(_peak_ppm(naa, 4.65), 2)] * 2
+    from readers.read_lcmodel import read_lcmodel_raw
+    from writers.write_lcmodel import write_lcmodel_raw
+    write_lcmodel_raw(moved, str(tmp_path / 'naa.raw'))
+    raw = read_lcmodel_raw(str(tmp_path / 'naa.raw'))
+    assert round(_peak_ppm(raw, 4.65), 2) == round(_peak_ppm(naa, 4.65), 2)

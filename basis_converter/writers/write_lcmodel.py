@@ -98,6 +98,26 @@ def write_lcmodel(basis_list, outdir, mode='both',
     return result
 
 
+######################## Centre #######################
+
+# the ppm at 0 Hz an LCModel basis is written for (PPMSEP below)
+LCMODEL_CENTRE = 4.65
+
+
+def _lcmodel_fid(core):
+    """
+    The FID referenced to LCModel's centre: a basis function stating another
+    (centerFreq, e.g. 3.0 ppm in Osprey's own basis sets) is shifted by the
+    difference, so its peaks stay at their ppm. One stating none is taken as it is.
+    """
+    fid    = np.asarray(core['fid']).ravel()
+    centre = core.get('centerFreq')
+    if centre is None or float(centre) == LCMODEL_CENTRE:
+        return fid
+    t = np.arange(len(fid)) / float(core['sw'])
+    return fid * np.exp(2j * np.pi * (float(centre) - LCMODEL_CENTRE) * float(core['sf']) * t)
+
+
 ######################## .raw writer #######################
 
 def write_lcmodel_raw(core, outpath):
@@ -112,7 +132,7 @@ def write_lcmodel_raw(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid  = np.asarray(core['fid']).ravel()
+    fid  = _lcmodel_fid(core)
     sf   = float(core['sf'])          # MHz — already correct, do NOT divide
     sw   = float(core['sw'])          # Hz
     n    = len(fid)
@@ -236,7 +256,7 @@ def write_lcmodel_basis(basis_list, outpath,
         ######################## Per-metabolite sections #######################
         for core in basis_list:
             name = core.get('name', 'unknown')
-            fid  = np.asarray(core['fid']).ravel()
+            fid  = _lcmodel_fid(core)
 
             # $NMUSED block (fitting defaults — standard values)
             f.write(" $NMUSED\n")
@@ -271,7 +291,7 @@ def write_lcmodel_basis(basis_list, outpath,
             f.write(" PPMPK_CONTAM=  0.00000000    ,\n")
             f.write(" PPMPHA=  0.00000000    ,\n")
             f.write(" PPMSCA=  8.43999958    ,\n")
-            f.write(" PPMSEP=  4.65000010    ,\n")
+            f.write(" PPMSEP=  4.65000010    ,\n")         # LCMODEL_CENTRE
             f.write(" PPMSPL= 40*997.000000      ,\n")
             f.write(" PPM_SPLIT= -999.000000    ,\n")
             f.write(" RINTEG=  0.00000000    ,\n")
