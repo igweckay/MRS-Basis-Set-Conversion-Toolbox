@@ -8,17 +8,17 @@ FSL-MRS .json structure (confirmed from your documentation):
     basis_re     - real part of FID (array)
     basis_im     - imaginary part of FID (array)
     basis_dwell  - dwell time in seconds
-    basis_centre - centre frequency in ppm (e.g. 4.65)
-    basis_width  - linewidth (optional, may be null)
+    basis_centre - the spectrometer (central) frequency in MHz, as FSL-MRS's fsl_io reads
+                   it (centralFrequency = basis_centre * 1E6); the ppm reference is not
+                   stored (FSL-MRS takes its nucleus' default, 4.65 ppm for 1H)
+    basis_width  - linewidth in Hz (optional, may be null)
     basis_name   - metabolite name string
 
 Optional:
     meta         - dict with time, SimVersion etc.
 
 Note:
-    - basis_centre is the ppm reference (equivalent to ppmCalib/centerFreq)
-    - FSL-MRS does NOT store Bo or sf directly
-      sf must be derived if needed — requires knowing Bo from context
+    - basis_centre is sf in MHz; no ppm reference is stored (centerFreq None)
     - dwell time is in seconds: sw = 1 / basis_dwell
     - Water-referenced: centre typically 4.65 ppm
 
@@ -26,7 +26,8 @@ Core struct returned per metabolite:
     {
         'fid'        : np.ndarray, complex, shape (n,)
         'sw'         : float, spectral width in Hz
-        'sf'         : float or None  (not stored — None unless derivable)
+        'sf'         : float or None, basis_centre (MHz)
+        'linewidth'  : float or None, basis_width (Hz)
         'n'          : int, number of points
         'name'       : str, metabolite name
         'centerFreq' : float, centre frequency in ppm
@@ -73,7 +74,8 @@ def read_fsLmrs_file(path):
     basis_im    = basis.get('basis_im')
     basis_dwell = basis.get('basis_dwell')
     basis_name  = basis.get('basis_name', '')
-    basis_centre= basis.get('basis_centre', 4.65)
+    basis_centre= basis.get('basis_centre')
+    basis_width = basis.get('basis_width')
 
     if basis_re is None or basis_im is None:
         raise RuntimeError(
@@ -92,8 +94,7 @@ def read_fsLmrs_file(path):
     sw  = 1.0 / float(basis_dwell)
     n   = len(fid)
 
-    # sf not stored in FSL-MRS — will need to be supplied by user or derived
-    sf  = None
+    sf  = float(basis_centre) if basis_centre is not None else None
 
     name = str(basis_name).strip("'\" ") if basis_name else \
            os.path.splitext(os.path.basename(path))[0]
@@ -104,7 +105,8 @@ def read_fsLmrs_file(path):
         'sf'         : sf,
         'n'          : n,
         'name'       : name,
-        'centerFreq' : float(basis_centre),
+        'centerFreq' : None,
+        'linewidth'  : float(basis_width) if basis_width is not None else None,
         'source'     : path,
     }
 

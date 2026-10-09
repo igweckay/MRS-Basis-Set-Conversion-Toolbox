@@ -11,8 +11,9 @@ FSL-MRS .json structure (confirmed from your documentation):
             "basis_re"    : [real FID values],
             "basis_im"    : [imag FID values],
             "basis_dwell" : dwell time in seconds,
-            "basis_centre": centre frequency in ppm,
-            "basis_width" : null,
+            "basis_centre": the spectrometer frequency in MHz (FSL-MRS reads it as
+                            centralFrequency = basis_centre * 1E6),
+            "basis_width" : linewidth in Hz, or null,
             "basis_name"  : "metabolite name"
         },
         "meta": {
@@ -22,10 +23,8 @@ FSL-MRS .json structure (confirmed from your documentation):
     }
 
 Note:
-    - basis_centre is the ppm reference (centerFreq or 4.65)
+    - basis_centre is sf in MHz; FSL-MRS stores no ppm reference (its nucleus' default)
     - basis_dwell = 1/sw in seconds
-    - sf (Larmor frequency) is NOT stored in FSL-MRS format
-    - Water-referenced: centre typically 4.65 ppm
 
 Entry points:
     write_fsLmrs_file(core, outpath)        → one .json file
@@ -55,8 +54,11 @@ def write_fsLmrs_file(core, outpath):
     name  = str(core.get('name', 'unknown'))
     dwell = 1.0 / sw
 
-    centre = float(core.get('centerFreq') or
-                   core.get('ppmCalib')   or 4.65)
+    sf = core.get('sf')
+    if sf is None:
+        raise RuntimeError(f"{name}: FSL-MRS stores the spectrometer frequency (sf), which "
+                           "the basis does not have")
+    linewidth = core.get('linewidth')
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -65,8 +67,8 @@ def write_fsLmrs_file(core, outpath):
             "basis_re"    : fid.real.tolist(),
             "basis_im"    : fid.imag.tolist(),
             "basis_dwell" : dwell,
-            "basis_centre": centre,
-            "basis_width" : None,
+            "basis_centre": float(sf),
+            "basis_width" : None if linewidth is None else float(linewidth),
             "basis_name"  : name,
         },
         "meta": {

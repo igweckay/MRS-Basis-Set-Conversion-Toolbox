@@ -36,11 +36,12 @@ def test_parameters_the_files_lack_are_filled_in_and_kept_where_stated(tmp_path)
     basis = load_basis(files, detect_format(files)['format'])
     sw = basis[0]['sw']
 
-    fill_missing(basis, {'sf': 123.2, 'sw': 1.0, 'te': None})
+    fill_missing(basis, {'sf': 123.2, 'sw': 1.0, 'te': 30})            # sf, sw stated: kept
     written = write_basis(basis, 'lcmodel', 'basis', str(tmp_path))
 
-    assert [b['sf'] for b in basis] == [123.2, 123.2] and basis[0]['sw'] == sw
-    assert detect_format(written)['data']['sf'] == 123.2
+    assert [b['sf'] for b in basis] == [123.261803, 123.261803] and basis[0]['sw'] == sw
+    assert [b['te'] for b in basis] == [30, 30]
+    assert detect_format(written)['data']['sf'] == 123.261803
 
 
 def test_raw_files_without_their_parameters_take_those_given(tmp_path):
@@ -51,3 +52,19 @@ def test_raw_files_without_their_parameters_take_those_given(tmp_path):
     written = write_basis(basis, 'lcmodel', 'basis', str(tmp_path))
 
     assert detect_format(written)['data']['sw'] == 4000
+
+
+def test_fsl_mrs_fields_are_the_frequency_and_the_linewidth(tmp_path):
+    """FSL-MRS's fsl_io reads basis_centre as the spectrometer frequency in MHz and
+    basis_width as the linewidth; the ppm reference is its nucleus' default, not stored."""
+    import json
+    from readers.read_fsLmrs import read_fsLmrs_file
+    from writers.write_fsLmrs import write_fsLmrs_file
+
+    asc = read_fsLmrs_file(os.path.join(SAMPLES, 'FSL-MRS', 'Asc.json'))
+    assert asc['sf'] == 123.261803 and asc['centerFreq'] is None and asc['linewidth'] is None
+
+    out = str(tmp_path / 'Asc.json')
+    write_fsLmrs_file(dict(asc, linewidth=2.5, centerFreq=3.0), out)
+    written = json.load(open(out))['basis']
+    assert written['basis_centre'] == 123.261803 and written['basis_width'] == 2.5

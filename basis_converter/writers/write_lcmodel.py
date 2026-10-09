@@ -228,7 +228,8 @@ def write_lcmodel_basis(basis_list, outpath,
     n     = int(first.get('n', len(first['fid'])))
     dwell = 1.0 / sw
 
-    linewidth   = float(first.get('linewidth', 0.01))
+    stated      = first.get('linewidth')
+    linewidth   = 0.01 if stated is None else float(stated)
     te_val      = float(te) if te is not None else 0.0
     date_str    = datetime.now().strftime('%d-%b-%Y')
     description = description or f"Basis set converted on {date_str}"
