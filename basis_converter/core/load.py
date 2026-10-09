@@ -2,7 +2,8 @@
 core/load.py
 Basis Set Converter — reading a basis set
 
-Reads basis functions with the reader for their format, as core.detect names it.
+Reads basis functions with the reader for their format, as core.detect names it,
+and fills in the parameters their files do not state.
 Used by the GUI (screen4_convert.py) and by scripts, without a GUI.
 """
 
@@ -17,7 +18,8 @@ def load_basis(files, fmt, sw=None, sf=None):
     ----------
     files : list of str, the basis files
     fmt   : str, the format as core.detect.detect_format names it
-    sw    : float or None, spectral width in Hz (SpinWizard files do not hold it)
+    sw    : float or None, spectral width in Hz, for files that do not hold it
+            (SpinWizard, LCModel/MARSS .raw without $SEQPAR)
     sf    : float or None, spectrometer frequency in MHz (likewise)
 
     Returns
@@ -37,7 +39,7 @@ def load_basis(files, fmt, sw=None, sf=None):
 
     if 'LCModel .raw' in fmt or 'MARSS .raw' in fmt:
         from readers.read_lcmodel import read_lcmodel_raw
-        return [read_lcmodel_raw(f) for f in files
+        return [read_lcmodel_raw(f, sw=sw, sf=sf) for f in files
                 if f.lower().endswith('.raw')]
 
     if 'Osprey' in fmt:
@@ -103,3 +105,20 @@ def load_basis(files, fmt, sw=None, sf=None):
         return read_gava(files[0])
 
     raise RuntimeError(f"No reader available for format: {fmt}")
+
+
+def fill_missing(basis_list, params):
+    """
+    Give each basis function the parameters it lacks.
+
+    Parameters
+    ----------
+    basis_list : list of core struct dicts, changed in place
+    params     : dict, e.g. {'sw': 4000.0, 'sf': 123.2, 'te': 30.0}; a field already
+                 set is kept, an empty value is skipped
+    """
+    for core_item in basis_list:
+        for key, val in params.items():
+            # Overwrite if missing OR if currently None
+            if val and (key not in core_item or core_item[key] is None):
+                core_item[key] = val

@@ -389,11 +389,8 @@ class Screen4Convert(BaseScreen):
         params = self.state.get('params', {})
         if params:
             self._step("Applying user parameters")
-            for core_item in basis_list:
-                for key, val in params.items():
-                    # Overwrite if missing OR if currently None
-                    if val and (key not in core_item or core_item[key] is None):
-                        core_item[key] = val
+            from core.load import fill_missing
+            fill_missing(basis_list, params)
 
         #################### Step 3: Run writer #################### 
         self._step(f"Writing {self.state.get('output_tool', '')} format",
@@ -417,130 +414,12 @@ class Screen4Convert(BaseScreen):
 
     def _write(self, basis_list, tool_id, out_fmt, outdir):
         """Run the appropriate writer."""
+        from core.write import write_basis
         te  = self.state.get('core', {}).get('te') or \
-              self.state.get('params', {}).get('te') or 30.0
+              self.state.get('params', {}).get('te')
         seq = self.state.get('core', {}).get('seq') or \
-              self.state.get('params', {}).get('seq') or 'unedited'
-
-        if tool_id == 'lcmodel':
-            from writers.write_lcmodel import write_lcmodel
-            result = write_lcmodel(basis_list, outdir,
-                                   mode=out_fmt if out_fmt in ('raw','basis','both') else 'both',
-                                   te=te, seq=seq)
-            paths = result.get('raw_files', []) + \
-                    ([result['basis_file']] if 'basis_file' in result else [])
-            return paths
-
-        if tool_id in ('spant', 'abfit'):
-            # SPANT uses LCModel .raw format
-            from writers.write_lcmodel import write_lcmodel
-            result = write_lcmodel(basis_list, outdir,
-                                   mode='raw' if out_fmt != 'nifti' else 'raw',
-                                   te=te, seq=seq)
-            if out_fmt == 'nifti':
-                from writers.write_niftimrs import write_niftimrs
-                return write_niftimrs(basis_list, outdir)
-            return result.get('raw_files', [])
-
-        if tool_id == 'tarquin':
-            from writers.write_lcmodel import write_lcmodel
-            result = write_lcmodel(basis_list, outdir, mode='basis', te=te, seq=seq)
-            return [result.get('basis_file', '')]
-
-        if tool_id == 'osprey':
-            from writers.write_osprey import write_osprey
-            out_file = os.path.join(outdir, 'basis.mat')
-            if out_fmt == 'nifti':
-                from writers.write_niftimrs import write_niftimrs
-                return write_niftimrs(basis_list, outdir)
-            if out_fmt == 'basis':
-                from writers.write_lcmodel import write_lcmodel
-                result = write_lcmodel(basis_list, outdir, mode='basis', te=te, seq=seq)
-                return [result.get('basis_file', '')]
-            write_osprey(basis_list, out_file, te=float(te or 30))
-            return [out_file]
-
-        if tool_id == 'fsLmrs':
-            from writers.write_fsLmrs import write_fsLmrs_folder
-            return write_fsLmrs_folder(basis_list, outdir)
-
-        if tool_id == 'inspector':
-            from writers.write_inspector import write_inspector
-            out_file = os.path.join(outdir, 'basis.mat')
-            write_inspector(basis_list, out_file)
-            return [out_file]
-
-        if tool_id in ('jmrui', 'quest', 'nmbscope', 'aqses'):
-            from writers.write_jmrui import write_jmrui_folder
-            return write_jmrui_folder(basis_list, outdir)
-
-        if tool_id == 'niftimrs':
-            from writers.write_niftimrs import write_niftimrs
-            return write_niftimrs(basis_list, outdir)
-
-        if tool_id == 'marss':
-            from writers.write_marss import (write_marss_folder,
-                                              write_marss_combined)
-            from writers.write_lcmodel import write_lcmodel_raw_folder
-            if out_fmt == 'mat_combined':
-                out_file = os.path.join(outdir, 'basis_combined.mat')
-                write_marss_combined(basis_list, out_file)
-                return [out_file]
-            if out_fmt == 'raw':
-                return write_lcmodel_raw_folder(basis_list, outdir)
-            return write_marss_folder(basis_list, outdir)
-
-        if tool_id == 'mrscloud':
-            from writers.write_mrscloud import write_mrscloud_folder
-            return write_mrscloud_folder(basis_list, outdir)
-
-        if tool_id in ('fida', 'fida_fit', 'spinach'):
-            from writers.write_fida import write_fida_folder
-            return write_fida_folder(basis_list, outdir)
-
-        if tool_id == 'pyamares':
-            from writers.write_pyamares import write_pyamares
-            out_file = os.path.join(outdir, 'pyamares_priors.csv')
-            write_pyamares(basis_list, out_file)
-            return [out_file]
-
-        if tool_id == 'oxsa':
-            from writers.write_oxsa import write_oxsa
-            out_file = os.path.join(outdir, 'run_oxsa_amares.m')
-            te = float(self.state.get('core', {}).get('te') or
-                      self.state.get('params', {}).get('te') or 26.0)
-            write_oxsa(basis_list, out_file, seqte=te)
-            return [out_file]
-
-        if tool_id == 'midas':
-            from writers.write_midas import write_midas
-            out_file = os.path.join(outdir, 'midas_priors.xml')
-            write_midas(basis_list, out_file)
-            return [out_file]
-
-        if tool_id == 'gava':
-            from writers.write_gava import write_gava
-            out_file = os.path.join(outdir, 'gava_priors.txt')
-            write_gava(basis_list, out_file)
-            return [out_file]
-
-        if tool_id in ('vespa_analysis', 'vespa_gen2'):
-            from writers.write_vespa import write_vespa
-            out_file = os.path.join(outdir, 'vespa_priors.xml')
-            write_vespa(basis_list, out_file)
-            return [out_file]
-
-        if tool_id in ('jet', 'spinwizard'):
-            from writers.write_spinwizard import write_spinwizard
-            return write_spinwizard(basis_list, outdir)
-
-        if tool_id == 'profit':
-            from writers.write_profit import write_profit
-            out_file = os.path.join(outdir, 'profit_struct.mat')
-            write_profit(basis_list, out_file)
-            return [out_file]
-
-        raise RuntimeError(f"No writer available for tool: {tool_id}")
+              self.state.get('params', {}).get('seq')
+        return write_basis(basis_list, tool_id, out_fmt, outdir, te=te, seq=seq)
 
     def _ask_output_folder(self):
         pass   # placeholder — actual call is in _convert via threading
