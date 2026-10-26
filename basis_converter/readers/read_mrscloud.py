@@ -76,6 +76,7 @@ def read_mrscloud_file(path, name=None):
         'n'      : n,
         'name'   : name,
         'Bo'     : Bo,
+        'centerFreq': _centre(s),
         'source' : path,
     }
 
@@ -174,3 +175,14 @@ def _get_optional(struct, field, default=None):
         return _get(struct, field, '')
     except RuntimeError:
         return default
+
+
+def _centre(struct):
+    """The ppm at 0 Hz of the ppm axis the file stores, or None: FID-A's frequency grid is
+    symmetric about 0 Hz, so it is the axis' midpoint (4.65 in FID-A's own files, 2.97 in
+    MRSCloud's, whose basis sets are centred near 3.0 ppm as Osprey's are)."""
+    ppm = _get_optional(struct, 'ppm', default=None)
+    ppm = None if ppm is None else np.asarray(ppm, dtype=float).ravel()
+    if ppm is None or ppm.size < 2:
+        return None
+    return round(float(ppm[0] + ppm[-1]) / 2, 4)

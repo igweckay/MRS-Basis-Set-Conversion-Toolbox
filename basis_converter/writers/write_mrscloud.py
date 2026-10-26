@@ -67,8 +67,9 @@ def write_mrscloud_file(core, outpath):
     specs = np.fft.fftshift(np.fft.ifft(fid))
 
     t   = np.arange(n) * dt
-    freq= np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / sw))
-    ppm = 4.65 + freq / sf
+    # ppm axis as MRSCloud (FID-A's sim_readout.m) stores it: descending, symmetric about 0 Hz
+    freq= np.linspace(-sw / 2 + sw / (2 * n), sw / 2 - sw / (2 * n), n)
+    ppm = -freq / (Bo * 42.577) + 4.65
 
     dims = {
         't'       : 1.0,

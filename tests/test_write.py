@@ -157,3 +157,35 @@ def test_nifti_mrs_keeps_a_stated_centre(tmp_path):
     back = read_lcmodel_raw(str(tmp_path / 'NAA.raw'), sw=naa['sw'], sf=naa['sf'])
 
     assert np.allclose(back['fid'], naa['fid'], atol=1e-4 * np.abs(naa['fid']).max())
+
+
+def test_mrscloud_converted_to_basis_is_mrscloud_own_basis(tmp_path):
+    """MRSCloud's basis sets are centred near 3.0 ppm, as the ppm axis each file stores says
+    (2.97 here); converted to .BASIS they are MRSCloud's own .BASIS export of the same set,
+    up to one scale for the set and the 5 digits a .BASIS keeps."""
+    import re
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'MRSCLOUD')
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder)
+                   if f.startswith('Siemens_') and f.endswith('.mat'))
+    written = write_basis(load_basis(files, 'MRSCloud .mat'), 'lcmodel', 'basis', str(tmp_path))
+
+    def spectra(path):
+        out = {}
+        for block in re.split(r'\$BASIS(?![0-9])', open(path).read())[1:]:
+            name = re.search(r"METABO\s*=\s*'([^']*)'", block).group(1).strip()
+            body = re.split(r'(?m)^\s*\$END\s*$', block, maxsplit=1)[1].split('$')[0]
+            v = np.array(body.split(), dtype=float)
+            out[name] = v[0::2] + 1j * v[1::2]
+        return out
+
+    own = spectra(os.path.join(SAMPLES, 'LCModel', 'BASIS_file', 'LCModel_Siemens_UnEdited_sLASER_105_.BASIS'))
+    ours = spectra(written[0])
+    scales = []
+    for name, spec in own.items():
+        a = np.fft.ifft(spec)                              # MRSCloud's is not zero-filled
+        b = np.fft.ifft(ours[name])[:len(a)]
+        k = np.vdot(a, b) / np.vdot(a, a)
+        scales.append(k)
+        assert np.linalg.norm(b - k * a) < 1e-4 * np.linalg.norm(b), name
+    assert np.allclose(scales, scales[0], rtol=1e-4)
