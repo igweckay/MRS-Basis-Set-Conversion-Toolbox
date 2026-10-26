@@ -70,7 +70,8 @@ def write_fida_file(core, outpath):
     Bo        = core.get('Bo') or (sf / 42.577)
     txfrq     = sf * 1e6               # MHz → Hz
     dwelltime = 1.0 / sw
-    linewidth = float(core.get('linewidth', 1.0))
+    stated    = core.get('linewidth')          # stated as None when the source has none
+    linewidth = 1.0 if stated is None else float(stated)
     te        = float(core.get('te', 0.0)) if core.get('te') else 0.0
     seq       = str(core.get('seq', 'unedited'))
     date_str  = datetime.now().strftime('%d-%b-%Y')
@@ -164,7 +165,7 @@ def write_fida_folder(basis_list, outdir):
         outpath = os.path.join(outdir, f"{name}.mat")
         try:
             write_fida_file(core, outpath)
-            written.append(name)
+            written.append(outpath)
             print(f"  Written: {name}.mat")
         except Exception as ex:
             failed.append(name)
