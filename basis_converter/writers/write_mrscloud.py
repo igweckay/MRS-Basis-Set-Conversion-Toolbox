@@ -36,6 +36,8 @@ import numpy as np
 import scipy.io as sio
 from datetime import datetime
 
+from writers.centre import fid_at_centre
+
 
 PROTON_GAMMA = 42577000.0   # Hz/T
 
@@ -52,7 +54,7 @@ def write_mrscloud_file(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid   = np.asarray(core['fid']).ravel().astype(complex)
+    fid   = fid_at_centre(core).astype(complex)   # its ppm axis below is at 4.65
     sw    = float(core['sw'])
     sf    = float(core['sf'])        # MHz
     n     = int(core.get('n', len(fid)))

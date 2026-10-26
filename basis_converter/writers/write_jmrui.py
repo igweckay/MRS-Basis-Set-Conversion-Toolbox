@@ -45,6 +45,8 @@ import os
 import numpy as np
 from datetime import datetime
 
+from writers.centre import fid_at_centre
+
 
 ######################## Constants #######################
 PROTON_GAMMA = 42577000.0   # Hz/T
@@ -190,7 +192,7 @@ def write_jmrui_folder(basis_list, outdir):
         name    = core.get('name', 'unknown')
         outpath = os.path.join(outdir, f"{name}.txt")
         txfrq   = float(core['sf']) * 1e6   # MHz → Hz
-        write_jmrui(core['fid'], core['sw'], txfrq, name, outpath)
+        write_jmrui(fid_at_centre(core), core['sw'], txfrq, name, outpath)
         written.append(outpath)
         print(f"  Written: {name}.txt")
     print(f"\n  Done. {len(written)} jMRUI files written to: {outdir}")
@@ -231,7 +233,7 @@ if __name__ == '__main__':
     for core in basis_list:
         outpath = os.path.join(outdir, f"{core['name']}.txt")
         txfrq   = core['sf'] * 1e6   # MHz → Hz
-        write_jmrui(core['fid'], core['sw'], txfrq, core['name'], outpath)
+        write_jmrui(fid_at_centre(core), core['sw'], txfrq, core['name'], outpath)
         print(f"  Written: {core['name']}.txt")
 
     print(f"\nDone. {len(basis_list)} files written to: {outdir}")

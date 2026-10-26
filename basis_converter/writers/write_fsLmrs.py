@@ -36,6 +36,8 @@ import json
 import numpy as np
 from datetime import datetime
 
+from writers.centre import fid_at_centre
+
 
 def write_fsLmrs_file(core, outpath):
     """
@@ -49,7 +51,7 @@ def write_fsLmrs_file(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid   = np.asarray(core['fid']).ravel().astype(complex)
+    fid   = fid_at_centre(core).astype(complex)   # FSL-MRS reads 1H at 4.65 ppm
     sw    = float(core['sw'])
     name  = str(core.get('name', 'unknown'))
     dwell = 1.0 / sw

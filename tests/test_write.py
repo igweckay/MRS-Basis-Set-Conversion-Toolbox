@@ -97,3 +97,20 @@ def test_a_basis_stating_no_linewidth_is_written_with_the_default(tmp_path):
 
         assert found['status'] == 'full', tool
         assert len(load_basis(written, found['format'])) == 2, tool
+
+
+def test_every_format_read_at_4_65_ppm_keeps_a_stated_centre(tmp_path):
+    """FSL-MRS, jMRUI, FID-A and MRSCloud state no ppm centre and are read at 4.65, as LCModel is:
+    a basis put at 3.0 ppm (Osprey's own sets) is shifted, so NAA stays at 2.01 ppm."""
+    import numpy as np
+    naa = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')[0]
+    t = np.arange(len(naa['fid'])) / naa['sw']
+    moved = dict(naa, fid=naa['fid'] * np.exp(2j * np.pi * 1.65 * naa['sf'] * t), centerFreq=3.0)
+
+    for tool in ('fsLmrs', 'jmrui', 'fida', 'mrscloud', 'lcmodel'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        written = write_basis([moved], tool, 'raw' if tool == 'lcmodel' else 'default', str(outdir))
+        back = load_basis(written, detect_format(written)['format'], sw=naa['sw'], sf=naa['sf'])[0]
+
+        assert np.allclose(back['fid'], naa['fid'], atol=1e-4 * np.abs(naa['fid']).max()), tool
