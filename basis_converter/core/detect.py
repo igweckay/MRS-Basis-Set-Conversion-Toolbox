@@ -245,6 +245,17 @@ def _try_niftimrs(path):
         return _failed(f"Could not read NIfTI-MRS file: {ex}")
 
 
+def _struct_keys(raw, keys):
+    """The fields of a .mat file's one variable, when it holds just one struct (MRSCloud
+    saves each metabolite as outA); none otherwise."""
+    if len(keys) != 1:
+        return set()
+    val = raw[next(iter(keys))]
+    if isinstance(val, dict):
+        return set(val.keys())
+    return set(getattr(getattr(val, 'dtype', None), 'names', None) or [])
+
+
 def _try_single_mat(path):
     """
     Inspect a single .mat file's fields to determine format.
@@ -325,8 +336,8 @@ def _try_single_mat(path):
         if 'fids' in out_keys and 'txfrq' in out_keys:
             return _read_and_return_fida_single(path)
 
-    ############## MRSCloud: top-level fids + txfrq + Bo #############
-    if {'fids', 'txfrq', 'Bo'}.issubset(keys):
+    ############## MRSCloud: fids + txfrq + Bo, top-level or in the one struct it saves (outA) #############
+    if {'fids', 'txfrq', 'Bo'}.issubset(keys | _struct_keys(raw, keys)):
         return _read_and_return_mrscloud_single(path)
 
     # Unknown — return ambiguous with whatever we can infer
@@ -374,8 +385,8 @@ def _try_mat_folder(paths):
         if {'fids', 'txfrq', 'nucleus'}.issubset(out_keys):
             return _read_and_return_fida_folder(paths)
 
-    # MRSCloud: top-level fids + txfrq + Bo + name
-    if {'fids', 'txfrq', 'Bo'}.issubset(keys):
+    # MRSCloud: fids + txfrq + Bo + name, top-level or in the one struct it saves (outA)
+    if {'fids', 'txfrq', 'Bo'}.issubset(keys | _struct_keys(raw, keys)):
         return _read_and_return_mrscloud_folder(paths)
 
     # Still ambiguous — return with partial data from first file

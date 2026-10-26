@@ -68,3 +68,17 @@ def test_fsl_mrs_fields_are_the_frequency_and_the_linewidth(tmp_path):
     write_fsLmrs_file(dict(asc, linewidth=2.5, centerFreq=3.0), out)
     written = json.load(open(out))['basis']
     assert written['basis_centre'] == 123.261803 and written['basis_width'] == 2.5
+
+
+def test_mrscloud_files_are_read_as_mrscloud_saves_them():
+    """MRSCloud saves each metabolite as the one struct outA, not as top-level fields."""
+    folder = os.path.join(SAMPLES, 'MRSCLOUD')
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder)
+                   if f.startswith('Siemens_') and f.endswith('.mat'))
+    found = detect_format(files)
+    basis = load_basis(files, found['format'])
+
+    assert found['format'] == 'MRSCloud .mat' and detect_format(files[:1])['format'] == 'MRSCloud .mat'
+    assert len(basis) == len(files) == 25
+    assert (basis[0]['name'], basis[0]['sw'], basis[0]['sf']) == ('Ace', 4000.0, 123.04753)
+
