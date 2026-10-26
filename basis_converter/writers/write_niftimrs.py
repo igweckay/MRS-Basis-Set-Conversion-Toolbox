@@ -31,6 +31,8 @@ import subprocess
 import tempfile
 import numpy as np
 
+from writers.centre import fid_at_centre
+
 
 def write_niftimrs(basis_list, outdir):
     """
@@ -92,7 +94,7 @@ def _write_raw(core, raw_path):
         - NUNFIL = n
         - DELTAT = 1/sw
     """
-    fid   = np.asarray(core['fid']).ravel()
+    fid   = fid_at_centre(core)    # NIfTI-MRS states no ppm centre: read at 4.65
     sf    = float(core['sf'])      # MHz — already correct
     sw    = float(core['sw'])      # Hz
     dwell = 1.0 / sw

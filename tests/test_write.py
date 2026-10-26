@@ -141,3 +141,19 @@ def test_osprey_states_the_centre_a_basis_stating_none_is_at(tmp_path):
     written = write_basis(basis, 'osprey', 'mat', str(tmp_path))
 
     assert load_basis(written, detect_format(written)['format'])[0]['centerFreq'] == 4.65
+
+
+def test_nifti_mrs_keeps_a_stated_centre(tmp_path):
+    """NIfTI-MRS states no ppm centre either (FSL-MRS reads 1H at 4.65); its .raw step, before
+    spec2nii, shifts a basis put at 3.0 ppm as the other writers do."""
+    import numpy as np
+    from readers.read_lcmodel import read_lcmodel_raw
+    from writers.write_niftimrs import _write_raw
+    naa = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')[0]
+    t = np.arange(len(naa['fid'])) / naa['sw']
+    moved = dict(naa, fid=naa['fid'] * np.exp(2j * np.pi * 1.65 * naa['sf'] * t), centerFreq=3.0)
+
+    _write_raw(moved, str(tmp_path / 'NAA.raw'))
+    back = read_lcmodel_raw(str(tmp_path / 'NAA.raw'), sw=naa['sw'], sf=naa['sf'])
+
+    assert np.allclose(back['fid'], naa['fid'], atol=1e-4 * np.abs(naa['fid']).max())
