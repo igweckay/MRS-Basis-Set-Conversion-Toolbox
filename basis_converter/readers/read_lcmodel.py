@@ -11,7 +11,8 @@ into the core struct format.
     For each metabolite:
         $NMUSED block  — FILRAW, fitting params (ignored)
         $BASIS block   — ID, METABO, CONC, TRAMP, VOLUME, ISHIFT
-        FID data       — real/imag pairs, FORTRAN format
+        spectrum data  — real/imag pairs, FORTRAN format: the FFT of the
+                         FID zero-filled to NDATAB (twice its length)
 
 .raw file structure:
     $SEQPAR block  — HZPPPM, NUNFIL, DELTAT
@@ -132,10 +133,14 @@ def read_lcmodel_basis(path):
         if next_block:
             data_text = data_text[:next_block.start()]
 
-        fid = _parse_fid_data(data_text, n)
-        if fid is None:
+        spec = _parse_fid_data(data_text, n)
+        if spec is None:
             _log(f"  WARNING: could not parse FID for {metabo} — skipping")
             continue
+
+        # The data block is the spectrum: back to the FID (first half of the inverse FFT,
+        # the rest is zero-filling), imaginary sign flipped as for .raw files
+        fid = np.conj(np.fft.ifft(spec, norm='ortho')[:len(spec) // 2])
 
         results.append({
             'fid'    : fid,
@@ -202,6 +207,9 @@ def read_lcmodel_raw(path, name=None, sw=None, sf=None):
         raise RuntimeError(
             f"Could not parse FID data from {os.path.basename(path)}"
         )
+
+    # .raw files store the imaginary sign flipped (see write_lcmodel_raw): flip it back
+    fid = np.conj(fid)
 
     if name is None:
         name = os.path.splitext(os.path.basename(path))[0]

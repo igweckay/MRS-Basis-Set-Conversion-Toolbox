@@ -32,12 +32,12 @@ Writes basis set to LCModel format:
      IDBASI='{description}'
      FMTBAS='(6E13.5)'
      BADELT=  {1/sw}
-     NDATAB=  {n}
+     NDATAB=  {2n}
     $END
     For each metabolite:
         $NMUSED ... $END   ← fitting defaults
         $BASIS ... $END    ← metabolite metadata
-        {FID data}
+        {spectrum data}    ← FFT of the FID zero-filled to 2n
 
 Key convention (confirmed from step_1_mat_to_raw.py):
     - Imaginary sign is FLIPPED: write [real, -imag]
@@ -229,7 +229,7 @@ def write_lcmodel_basis(basis_list, outpath,
         f.write(f" IDBASI='{description[:80]}',\n")
         f.write(" FMTBAS='(6E13.5)                                                                        ',\n")
         f.write(f" BADELT=  {dwell:.8E},\n")
-        f.write(f" NDATAB=       {n},\n")
+        f.write(f" NDATAB=       {2 * n},\n")   # zero-filled to 2n, as MakeBasis
         f.write(" \n")
         f.write(" $END\n")
 
@@ -291,14 +291,18 @@ def write_lcmodel_basis(basis_list, outpath,
             f.write(" \n")
             f.write(" $END\n")
 
-            # FID data — interleaved real / -imag, 6 values per line (FMTBAS 6E13.5)
+            # Spectrum data — LCModel reads this block as the frequency-domain spectrum:
+            # the orthonormal FFT of the FID in .raw orientation (imaginary sign flipped),
+            # zero-filled to 2n, as MakeBasis writes it. Interleaved real / imag, 6 per line.
+            spec = np.fft.fft(np.conj(fid), n=2 * len(fid), norm='ortho')
             vals = []
-            for z in fid:
-                vals.extend([z.real, -z.imag])
+            for z in spec:
+                vals.extend([z.real, z.imag])
 
             for i in range(0, len(vals), 6):
                 chunk = vals[i:i + 6]
-                f.write(" ".join(f"{v:+13.5E}" for v in chunk) + "\n")
+                # fixed-width fields, no separator: FMTBAS (6E13.5) reads 13 characters each
+                f.write("".join(f"{v:13.5E}" for v in chunk) + "\n")
 
     print(f"  Written: {os.path.basename(outpath)} "
           f"({len(basis_list)} metabolites)")
