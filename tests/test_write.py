@@ -114,3 +114,21 @@ def test_every_format_read_at_4_65_ppm_keeps_a_stated_centre(tmp_path):
         back = load_basis(written, detect_format(written)['format'], sw=naa['sw'], sf=naa['sf'])[0]
 
         assert np.allclose(back['fid'], naa['fid'], atol=1e-4 * np.abs(naa['fid']).max()), tool
+
+
+def test_osprey_creatines_hold_both_their_parts(tmp_path):
+    """MARSS splits Cr and PCr into the 3.9 ppm CH2 and the rest; Osprey's own Cr and PCr hold
+    both, and its CrCH2 is a negative CH2 correction, so the parts are summed into Cr and PCr."""
+    import numpy as np
+    parts = ('Cr391', 'CrNo391', 'PCr393', 'PCrNo393', 'NAA')
+    basis = load_basis([os.path.join(SAMPLES, 'JMRUI', f'{p}.txt') for p in parts], 'jMRUI .txt')
+    fid = {b['name']: b['fid'] for b in basis}
+
+    written = write_basis(basis, 'osprey', 'mat', str(tmp_path))
+    back = {b['name']: b['fid'] for b in load_basis(written, detect_format(written)['format'])}
+
+    assert 'CrCH2' not in back
+    for name, summed in (('Cr', fid['Cr391'] + fid['CrNo391']), ('PCr', fid['PCr393'] + fid['PCrNo393'])):
+        got = back[name][:len(summed)]
+        scale = np.vdot(summed, got) / np.vdot(summed, summed)       # Osprey normalises the set
+        assert np.linalg.norm(got - scale * summed) < 1e-6 * np.linalg.norm(got), name

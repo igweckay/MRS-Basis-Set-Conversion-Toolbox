@@ -35,8 +35,8 @@ NAME_MAP = {
     'Asc'     : 'Asc',
     'Asp'     : 'Asp',
     'Cho'     : 'PCh',
-    'Cr391'   : 'Cr',
-    'CrNo391' : 'CrCH2',
+    'Cr391'   : 'Cr',        # parts, summed (PARTS)
+    'CrNo391' : 'Cr',
     'GABA'    : 'GABA',
     'Glc'     : 'Glc',
     'Gln'     : 'Gln',
@@ -51,13 +51,17 @@ NAME_MAP = {
     'MM09'    : 'Lip09',
     'NAA'     : 'NAA',
     'NAAG'    : 'NAAG',
-    'PCr393'  : 'PCr',
-    'PCrNo393': 'SKIP',      # no standard Osprey name
+    'PCr393'  : 'PCr',       # parts, summed (PARTS)
+    'PCrNo393': 'PCr',
     'PE'      : 'PE',
     'sl'      : 'sI',
     'sI'      : 'sI',
     'Tau'     : 'Tau',
 }
+
+# MARSS splits Cr and PCr into the 3.9 ppm CH2 and the rest; Osprey's Cr and PCr hold both
+# (its CrCH2 is a negative CH2 correction term), so the parts are summed into one
+PARTS = {'Cr391', 'CrNo391', 'PCr393', 'PCrNo393'}
 
 # MM/Lip proton-equivalent counts for rescaling
 MM_LIP_SCALING = {
@@ -113,7 +117,12 @@ def write_osprey(basis_list, outpath,
             continue
 
         if osp_name in met_names:
-            print(f"  Skipping duplicate '{osp_name}' from: {stem}")
+            if stem in PARTS:
+                met_fids[met_names.index(osp_name)] = \
+                    met_fids[met_names.index(osp_name)] + np.asarray(core['fid']).ravel().astype(complex)
+                print(f"  Summed: {stem:15s} -> {osp_name}")
+            else:
+                print(f"  Skipping duplicate '{osp_name}' from: {stem}")
             continue
 
         # Store reference parameters from first valid metabolite
