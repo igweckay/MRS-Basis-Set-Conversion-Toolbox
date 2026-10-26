@@ -52,7 +52,7 @@ def write_inspector(basis_list, outpath, ppm_calib=4.675):
 
     for i, core in enumerate(basis_list):
         name = str(core.get('name', f'Metab_{i+1:02d}'))
-        lw   = float(core.get('linewidth', 1.5))
+        lw   = 1.5 if core.get('linewidth') is None else float(core['linewidth'])
         fid  = np.asarray(core['fid']).ravel().astype(complex)[:n]
         names.append(name)
         linewidths.append(lw)

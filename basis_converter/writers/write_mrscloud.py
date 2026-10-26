@@ -98,7 +98,7 @@ def write_mrscloud_file(core, outpath):
         'spectralwidth': sw,
         'dwelltime'    : dt,
         'n'            : float(n),
-        'linewidth'    : float(core.get('linewidth', 1.0)),
+        'linewidth'    : 1.0 if core.get('linewidth') is None else float(core['linewidth']),
         'Bo'           : Bo,
         'txfrq'        : txfrq,
         't'            : t.reshape(1, -1),

@@ -82,3 +82,18 @@ def test_mrscloud_files_are_read_as_mrscloud_saves_them():
     assert len(basis) == len(files) == 25
     assert (basis[0]['name'], basis[0]['sw'], basis[0]['sf']) == ('Ace', 4000.0, 123.04753)
 
+
+def test_a_basis_stating_no_linewidth_is_written_with_the_default(tmp_path):
+    """FSL-MRS states the linewidth as null when it has none; every writer takes its default."""
+    files = [os.path.join(SAMPLES, 'FSL-MRS', name) for name in ('NAA.json', 'Cr391.json')]
+    basis = load_basis(files, detect_format(files)['format'])
+    assert [b['linewidth'] for b in basis] == [None, None]
+
+    for tool in ('inspector', 'fida', 'mrscloud'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        written = write_basis(basis, tool, 'default', str(outdir))
+        found = detect_format(written)
+
+        assert found['status'] == 'full', tool
+        assert len(load_basis(written, found['format'])) == 2, tool
