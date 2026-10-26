@@ -132,3 +132,12 @@ def test_osprey_creatines_hold_both_their_parts(tmp_path):
         got = back[name][:len(summed)]
         scale = np.vdot(summed, got) / np.vdot(summed, summed)       # Osprey normalises the set
         assert np.linalg.norm(got - scale * summed) < 1e-6 * np.linalg.norm(got), name
+
+
+def test_osprey_states_the_centre_a_basis_stating_none_is_at(tmp_path):
+    """A basis read from a format with no ppm centre is at 4.65 ppm (writers/centre.py); Osprey
+    reads its peaks against the centerFreq it states."""
+    basis = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')
+    written = write_basis(basis, 'osprey', 'mat', str(tmp_path))
+
+    assert load_basis(written, detect_format(written)['format'])[0]['centerFreq'] == 4.65

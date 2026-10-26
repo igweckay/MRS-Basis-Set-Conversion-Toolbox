@@ -27,6 +27,8 @@ import os
 import numpy as np
 import scipy.io as sio
 
+from writers.centre import CENTRE
+
 
 ############# Name mapping (MARSS filename stems -> Osprey names) #############
 # 'SKIP' means the metabolite is excluded from the Osprey basis set
@@ -131,7 +133,7 @@ def write_osprey(basis_list, outpath,
             sf          = float(core['sf'])          # MHz
             n_native    = int(core['n'])
             center_freq = float(core.get('centerFreq') or
-                                core.get('ppmCalib') or 4.68)
+                                core.get('ppmCalib') or CENTRE)   # one stating none is at 4.65
 
         met_names.append(osp_name)
         met_fids.append(np.asarray(core['fid']).ravel().astype(complex))
