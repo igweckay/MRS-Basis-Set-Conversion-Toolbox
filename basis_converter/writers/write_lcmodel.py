@@ -98,6 +98,26 @@ def write_lcmodel(basis_list, outdir, mode='both',
     return result
 
 
+######################## Centre #######################
+
+# the ppm at 0 Hz an LCModel basis is written for (PPMSEP below)
+LCMODEL_CENTRE = 4.65
+
+
+def _lcmodel_fid(core):
+    """
+    The FID referenced to LCModel's centre: a basis function stating another
+    (centerFreq, e.g. 3.0 ppm in Osprey's own basis sets) is shifted by the
+    difference, so its peaks stay at their ppm. One stating none is taken as it is.
+    """
+    fid    = np.asarray(core['fid']).ravel()
+    centre = core.get('centerFreq')
+    if centre is None or float(centre) == LCMODEL_CENTRE:
+        return fid
+    t = np.arange(len(fid)) / float(core['sw'])
+    return fid * np.exp(2j * np.pi * (float(centre) - LCMODEL_CENTRE) * float(core['sf']) * t)
+
+
 ######################## .raw writer #######################
 
 def write_lcmodel_raw(core, outpath):
@@ -112,7 +132,7 @@ def write_lcmodel_raw(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid  = np.asarray(core['fid']).ravel()
+    fid  = _lcmodel_fid(core)
     sf   = float(core['sf'])          # MHz — already correct, do NOT divide
     sw   = float(core['sw'])          # Hz
     n    = len(fid)
@@ -208,7 +228,8 @@ def write_lcmodel_basis(basis_list, outpath,
     n     = int(first.get('n', len(first['fid'])))
     dwell = 1.0 / sw
 
-    linewidth   = float(first.get('linewidth', 0.01))
+    stated      = first.get('linewidth')
+    linewidth   = 0.01 if stated is None else float(stated)
     te_val      = float(te) if te is not None else 0.0
     date_str    = datetime.now().strftime('%d-%b-%Y')
     description = description or f"Basis set converted on {date_str}"
@@ -217,26 +238,26 @@ def write_lcmodel_basis(basis_list, outpath,
 
         ######################## $SEQPAR block #######################
         f.write(" $SEQPAR\n")
-        f.write(f" FWHMBA=  {linewidth:.8E},\n")
-        f.write(f" HZPPPM=  {sf:.6f}    ,\n")
-        f.write(f" ECHOT=  {te_val:.7f}    ,\n")
-        f.write(f" SEQ='{seq[:6]}',\n")   # LCModel truncates to 6 chars
+        f.write(f" FWHMBA = {linewidth:.8E},\n")
+        f.write(f" HZPPPM = {sf:.6f},\n")
+        f.write(f" ECHOT = {te_val:.7f},\n")
+        f.write(f" SEQ = '{seq[:6]}',\n")   # LCModel truncates to 6 chars
         f.write(" \n")
         f.write(" $END\n")
 
         ######################## $BASIS1 block #######################
         f.write(" $BASIS1\n")
-        f.write(f" IDBASI='{description[:80]}',\n")
-        f.write(" FMTBAS='(6E13.5)                                                                        ',\n")
-        f.write(f" BADELT=  {dwell:.8E},\n")
-        f.write(f" NDATAB=       {2 * n},\n")   # zero-filled to 2n, as MakeBasis
+        f.write(f" IDBASI = '{description[:80]}',\n")
+        f.write(" FMTBAS = '(6E13.5)',\n")
+        f.write(f" BADELT = {dwell:.8E},\n")
+        f.write(f" NDATAB = {2 * n}\n")   # zero-filled to 2n, as MakeBasis
         f.write(" \n")
         f.write(" $END\n")
 
         ######################## Per-metabolite sections #######################
         for core in basis_list:
             name = core.get('name', 'unknown')
-            fid  = np.asarray(core['fid']).ravel()
+            fid  = _lcmodel_fid(core)
 
             # $NMUSED block (fitting defaults — standard values)
             f.write(" $NMUSED\n")
@@ -271,7 +292,7 @@ def write_lcmodel_basis(basis_list, outpath,
             f.write(" PPMPK_CONTAM=  0.00000000    ,\n")
             f.write(" PPMPHA=  0.00000000    ,\n")
             f.write(" PPMSCA=  8.43999958    ,\n")
-            f.write(" PPMSEP=  4.65000010    ,\n")
+            f.write(" PPMSEP=  4.65000010    ,\n")         # LCMODEL_CENTRE
             f.write(" PPMSPL= 40*997.000000      ,\n")
             f.write(" PPM_SPLIT= -999.000000    ,\n")
             f.write(" RINTEG=  0.00000000    ,\n")
@@ -282,12 +303,12 @@ def write_lcmodel_basis(basis_list, outpath,
 
             # $BASIS block
             f.write(" $BASIS\n")
-            f.write(f" ID='{name}',\n")
-            f.write(f" METABO='{name[:6]:<6}',\n")   # LCModel truncates to 6
-            f.write(" CONC=  1.00000000    ,\n")
-            f.write(" TRAMP=  1.00000000    ,\n")
-            f.write(" VOLUME=  1.00000000    ,\n")
-            f.write(" ISHIFT=          0,\n")
+            f.write(f" ID = '{name}',\n")
+            f.write(f" METABO = '{name[:6]:<6}',\n")   # LCModel truncates to 6
+            f.write(" CONC = 1.00000000,\n")
+            f.write(" TRAMP = 1.00000000,\n")
+            f.write(" VOLUME = 1.00000000,\n")
+            f.write(" ISHIFT = 0,\n")
             f.write(" \n")
             f.write(" $END\n")
 

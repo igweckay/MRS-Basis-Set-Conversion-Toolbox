@@ -193,8 +193,6 @@ def read_lcmodel_raw(path, name=None, sw=None, sf=None):
     nunfil  = int(float(seqpar.get('NUNFIL', 0)))
     deltat  = float(seqpar.get('DELTAT', 0))
 
-    sw = round(1.0 / deltat) if deltat > 0 else 0.0
-
     ############## Find FID data after last $END #############
     last_end = text.upper().rfind('$END')
     if last_end == -1:
