@@ -129,7 +129,8 @@ def test_osprey_creatines_hold_both_their_parts(tmp_path):
 
     assert 'CrCH2' not in back
     for name, summed in (('Cr', fid['Cr391'] + fid['CrNo391']), ('PCr', fid['PCr393'] + fid['PCrNo393'])):
-        got = back[name][:len(summed)]
+        # from the second point: Osprey's DC correction (op_dccorr) takes a constant off the spectrum
+        got, summed = back[name][1:len(summed)], summed[1:]
         scale = np.vdot(summed, got) / np.vdot(summed, summed)       # Osprey normalises the set
         assert np.linalg.norm(got - scale * summed) < 1e-6 * np.linalg.norm(got), name
 
@@ -388,3 +389,47 @@ def test_a_ppmcalib_is_not_taken_as_the_centre(tmp_path):
     for tool in ('vespa_analysis', 'midas', 'gava', 'oxsa'):
         (text, values), (text_j, values_j) = priors(marss, tool), priors(_jmrui(), tool)
         assert text == text_j and np.allclose(values, values_j, rtol=1e-6, atol=1e-9), tool
+
+
+def _osprey(basis, tmp_path):
+    """The BASIS struct the Osprey writer saves: its names, FIDs, spectra and ppm axis."""
+    import numpy as np
+    import scipy.io as sio
+    path = write_basis(basis, 'osprey', 'default', str(tmp_path), te=26.0)[0]
+    b = sio.loadmat(path, squeeze_me=True, struct_as_record=False)['BASIS']
+    names = [str(n) for n in np.ravel(b.name)]
+    return names, np.asarray(b.fids), np.asarray(b.specs), np.asarray(b.ppm).ravel()
+
+
+def test_osprey_macromolecules_are_osprey_own(tmp_path):
+    """The Osprey writer builds Osprey's MM and lipids as its fit_makeBasis does: in proton
+    equivalents of a third of creatine's 3.027 ppm singlet, Gaussians of decay 1 / (pi lw)."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'NAA')], 'jMRUI .txt')
+    names, fids, specs, ppm = _osprey(basis, tmp_path)
+    cr, mm12 = np.real(specs[:, names.index('Cr')]), np.real(specs[:, names.index('MM12')])
+
+    # three protons for creatine's singlet, two for MM12 (Osprey's Lorentzian area, near the sum)
+    singlet = cr[(ppm > 3.027 - 0.1) & (ppm < 3.027 + 0.1)].sum()
+    assert abs(mm12.sum() / singlet / (2 / 3) - 1) < 0.15
+    n = 16 * len(mm12)                                                       # its width, finely sampled
+    fine = np.real(np.fft.fftshift(np.fft.fft(fids[:, names.index('MM12')], n)))
+    half = np.flatnonzero(fine > fine.max() / 2)
+    width = (half[-1] - half[0]) * (ppm[1] - ppm[0]) * len(mm12) / n
+    assert abs(width - 2 * np.sqrt(2 * np.log(2)) / 2 * 0.15) < 0.005     # decay 1 / (pi lw), lw 0.15 ppm
+
+
+def test_a_macromolecule_the_set_brings_takes_osprey_own_place(tmp_path):
+    """A set's MM09 is a macromolecule: it is written as MM09, in place of Osprey's Gaussian, not as
+    a lipid; Osprey's own Lip09 is added beside it."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'MM09')], 'jMRUI .txt')
+    names, fids, _, _ = _osprey(basis, tmp_path)
+    given = next(b for b in basis if b['name'] == 'MM09')['fid'][1:]
+
+    assert names.count('MM09') == 1 and 'Lip09' in names
+    written = fids[1:len(given) + 1, names.index('MM09')]                    # from the second point:
+    scale = np.vdot(given, written) / np.vdot(given, given)                  # its DC correction
+    assert np.linalg.norm(written - scale * given) < 1e-6 * np.linalg.norm(written)

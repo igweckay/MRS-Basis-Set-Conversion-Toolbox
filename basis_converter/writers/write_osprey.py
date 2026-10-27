@@ -2,22 +2,26 @@
 writers/write_osprey.py
 Basis Set Converter — Osprey writer
 
-Translates createOspreyBasisSet.m to Python.
-Assembles a list of core struct dicts into an Osprey-compatible BASIS .mat file.
+Assembles a list of core struct dicts into an Osprey-compatible BASIS .mat file, as
+Osprey's own sets hold one: its metabolites, and its macromolecules, lipids and water.
+The functions, the macromolecules and lipids and their scale are Osprey's own
+fit_makeBasis (libraries/FID-A/fitTools), so a set gets the basis Osprey would build
+from the same functions:
 
-Pipeline (confirmed from createOspreyBasisSet.m):
-    1. Apply name mapping (MARSS names -> Osprey names)
+Pipeline:
+    1. Apply name mapping (MARSS names -> Osprey names), summing MARSS's creatine parts
     2. Skip SKIP entries and duplicates
     3. Zero-pad FIDs to targetN if needed
-    4. DC-correct each FID (remove mean of last 10%)
-    5. Compute specs = fftshift(fft(fids))   ← Osprey uses fft NOT ifft
-    6. Estimate one-proton area from Cr (3.93 ppm window)
-    7. Rescale MM/Lip to proton-equivalent amplitudes
-    8. Add synthetic H2O Lorentzian at 4.68 ppm
-    9. Optionally add parametric MM/Lip Gaussians for missing components
+    4. DC-correct each function as op_dccorr(.., 'p') does: the mean of the spectrum in
+       the 0.5 ppm at each end of its axis, subtracted
+    5. Compute specs = fftshift(fft(fids))   <- Osprey uses fft NOT ifft
+    6. One-proton area as detCrArea: a Lorentzian fitted to Cr's 3.027 ppm singlet, / 3
+    7. Rescale MM/Lip the set brings to proton-equivalent amplitudes
+    8. Add synthetic H2O Lorentzian at 4.68 ppm (Osprey's own sets hold one, for water fits)
+    9. Optionally add Osprey's MM/Lip Gaussians (op_gaussianPeak) for missing components
    10. Reorder: metabolites first, MM/Lip/H2O last
-   11. Normalize: divide by max(abs(real(specs)))
-   12. Assemble and save BASIS struct as .mat v7.3
+   11. Normalize: divide by max(real(specs)), Osprey's BASIS.scale
+   12. Assemble and save BASIS struct as .mat
 
 Entry point:
     write_osprey(basis_list, outpath, target_n, add_mm, te, sequence)
@@ -50,7 +54,7 @@ NAME_MAP = {
     'ml'      : 'mI',
     'mI'      : 'mI',
     'MM'      : 'SKIP',      # composite MM — replaced by parametric components
-    'MM09'    : 'Lip09',
+    'MM09'    : 'MM09',      # a macromolecule; it takes the place of Osprey's own MM09
     'NAA'     : 'NAA',
     'NAAG'    : 'NAAG',
     'PCr393'  : 'PCr',       # parts, summed (PARTS)
@@ -158,8 +162,7 @@ def write_osprey(basis_list, outpath,
     Bo      = sf / 42.577
     hzppm   = sf               # numerically equal (sf in MHz = Hz/ppm)
     t       = np.arange(final_n) * dt
-    f_axis  = (np.arange(final_n) - final_n / 2) * (sw / final_n)
-    ppm_axis= f_axis / hzppm + center_freq
+    ppm_axis= _ppm_axis(final_n, sw, hzppm, center_freq)
 
     ############# Step 4: Build fids / specs with DC correction #############
     n_mets = len(met_names)
@@ -171,31 +174,10 @@ def write_osprey(basis_list, outpath,
         copy_len = min(len(fid), final_n)
         pad_fid[:copy_len] = fid[:copy_len]
 
-        # DC correction: remove mean of last 10% of FID
-        # Zero-fill to 2x length first to ensure FID has decayed fully,
-        # then cut back to original length after correction.
-        # This prevents phase errors for FIDs that haven't fully decayed
-        # within the original point count (e.g. PCr393 at 2048 points).
-        zf_n    = final_n * 2
-        zf_fid  = np.zeros(zf_n, dtype=complex)
-        zf_fid[:final_n] = pad_fid
-        dc_start = round(0.9 * zf_n)
-        if zf_n - dc_start > 1:
-            last_10_max = np.max(np.abs(zf_fid[dc_start:]))
-            overall_max = np.max(np.abs(zf_fid))
-            dc_mean     = np.mean(zf_fid[dc_start:])
-            fid0_mag    = np.abs(zf_fid[0]) if np.abs(zf_fid[0]) > 0 else overall_max
-            decay_ratio = last_10_max / overall_max if overall_max > 0 else 0
-            dc_ratio    = np.abs(dc_mean) / fid0_mag if fid0_mag > 0 else 0
-            if decay_ratio < 0.25 and dc_ratio < 0.10:
-                zf_fid -= dc_mean
-        pad_fid = zf_fid[:final_n]
-
-        fids[:, kk]  = pad_fid
-        specs[:, kk] = np.fft.fftshift(np.fft.fft(pad_fid))
+        fids[:, kk], specs[:, kk] = _dccorr(pad_fid, ppm_axis)
 
     ############# Step 5: One-proton area estimate #############
-    one_proton_area = _estimate_one_proton_area(specs, met_names, ppm_axis)
+    one_proton_area = _cr_area(specs, met_names, ppm_axis, Bo) / 3
 
     ############# Step 6: Rescale MM/Lip to proton-equivalent amplitudes #############
     if one_proton_area > 0:
@@ -259,7 +241,7 @@ def write_osprey(basis_list, outpath,
     n_mets_only = len(met_idx)
 
     ############# Step 10: Normalize #############
-    scale_factor = np.max(np.abs(np.real(specs)))
+    scale_factor = np.max(np.real(specs))
     if scale_factor > 0:
         fids  /= scale_factor
         specs /= scale_factor
@@ -312,7 +294,7 @@ def write_osprey(basis_list, outpath,
         'name'          : np.array(met_names, dtype=object).reshape(1, -1),   # a cell of strings, not padded chars
         'dims'          : dims,
         'nMets'         : float(n_mets_only),
-        'sz'            : np.array([final_n, n_mets], dtype=np.uint16),
+        'sz'            : np.array([final_n, n_mets], dtype=float),   # double, as MATLAB's size() is
         'scale'         : scale_factor,
     }
 
@@ -331,37 +313,50 @@ def write_osprey(basis_list, outpath,
 
 
 ############# Helper functions (translated from MATLAB) #############
-def _estimate_one_proton_area(specs, names, ppm):
-    """
-    Estimate area of one proton from Cr (3.93 ppm) or PCr (3.93 ppm).
-    Confirmed from estimateOneProtonArea() in createOspreyBasisSet.m
-    """
-    ppm = np.asarray(ppm).ravel()
+def _ppm_axis(n, sw, hzppm, center_freq):
+    """Osprey's ppm axis (fit_makeBasis, op_gaussianPeak): bin centres, half a bin off 0 Hz."""
+    f = -sw / 2 + sw / (2 * n) + np.arange(n) * sw / n
+    return f / hzppm + center_freq
 
-    idx_cr  = names.index('Cr')  if 'Cr'  in names else None
-    idx_pcr = names.index('PCr') if 'PCr' in names else None
 
-    if idx_cr is not None:
-        idx, ref_name = idx_cr, 'Cr'
-    elif idx_pcr is not None:
-        idx, ref_name = idx_pcr, 'PCr'
-    else:
-        print("  WARNING: Cr and PCr not found — MM/Lip scaling disabled.")
+def _dccorr(fid, ppm):
+    """op_dccorr(.., 'p'): the mean of the spectrum in the 0.5 ppm at each end of the axis,
+    subtracted; the FID and the spectrum."""
+    spec = np.fft.fftshift(np.fft.fft(fid))
+    hi = (ppm < ppm.max()) & (ppm > ppm.max() - 0.5)
+    lo = (ppm < ppm.min() + 0.5) & (ppm > ppm.min())
+    spec = spec - np.mean([np.mean(spec[hi]), np.mean(spec[lo])])
+    shifted = np.fft.fftshift(spec) if len(spec) % 2 == 0 else np.roll(np.fft.fftshift(spec), 1)
+    return np.fft.ifft(shifted), spec
+
+
+def _lorentz(ppm, amp, fwhm, ppm0, offset, phase):
+    """op_lorentz with five parameters: a Lorentzian of height amp, phased (degrees)."""
+    gam = fwhm / 2
+    y = np.sqrt(2 / np.pi) * (gam - 1j * (ppm - ppm0)) / (gam ** 2 + (ppm - ppm0) ** 2)
+    return np.real((y / np.max(np.abs(y)) * amp + offset) * np.exp(1j * phase * np.pi / 180))
+
+
+def _cr_area(specs, names, ppm, Bo):
+    """
+    detCrArea: the area of a Lorentzian fitted to Cr's 3.027 ppm singlet (three protons),
+    summed over 3.027 +/- 0.4 ppm; 0 without Cr (no MM/Lip scaling then).
+    """
+    from scipy.optimize import curve_fit
+    if 'Cr' not in names:
+        print("  WARNING: Cr not found — MM/Lip scaling disabled.")
         return 0.0
-
-    ref_ppm  = 3.93
-    n_prot   = 3
-    half_win = 0.4
-
-    mask     = (ppm >= ref_ppm - half_win) & (ppm <= ref_ppm + half_win)
-    win_area = np.sum(np.real(specs[mask, idx]))
-    if win_area <= 0:
-        win_area = abs(win_area)
-
-    one_proton_area = win_area / n_prot
-    print(f"\n  oneProtonArea reference: '{ref_name}' at {ref_ppm}+/-{half_win} ppm")
-    print(f"    Window area={win_area:.4e}, oneProtonArea={one_proton_area:.4e}")
-    return one_proton_area
+    window = (ppm > 3.027 - 0.4) & (ppm < 3.027 + 0.4)
+    ref, at = specs[window, names.index('Cr')], ppm[window]
+    peak = int(np.argmax(np.abs(np.real(ref))))
+    guess = [np.real(ref[peak]), (5 * Bo / 3) / (42.577 * Bo), at[peak], 0.0, 0.0]
+    try:
+        pars, _ = curve_fit(_lorentz, at, np.real(ref), p0=guess, maxfev=20000)
+    except RuntimeError:
+        pars = guess
+    area = float(np.sum(_lorentz(at, *pars)))
+    print(f"\n  Cr area (Lorentzian at {pars[2]:.3f} ppm)={area:.4e}, oneProtonArea={area / 3:.4e}")
+    return area
 
 
 def _make_lorentzian(n, sw, hzppm, freq_ppm, fwhm_hz, center_freq, amp):
@@ -375,57 +370,42 @@ def _make_lorentzian(n, sw, hzppm, freq_ppm, fwhm_hz, center_freq, amp):
     return fid, spec
 
 
-def _make_gaussian(n, sw, hzppm, freq_ppm, fwhm_hz, center_freq, amp):
-    """Synthetic Gaussian FID and spectrum."""
-    dt      = 1.0 / sw
-    t       = np.arange(n) * dt
+def _make_gaussian(n, sw, hzppm, freq_ppm, lw_hz, center_freq, amp):
+    """op_gaussianPeak: a Gaussian FID of Osprey's width lw (decay 1 / (pi lw)), DC-corrected
+    as fit_makeBasis does each; the FID and the spectrum."""
+    t       = np.arange(n) / sw
     freq_hz = (freq_ppm - center_freq) * hzppm
-    sigma   = fwhm_hz / (2 * np.sqrt(2 * np.log(2)))
-    T2s     = 1.0 / (2 * np.pi * sigma)
-    fid     = amp * np.exp(1j * 2 * np.pi * freq_hz * t) * np.exp(-(t**2) / (2 * T2s**2))
-    spec    = np.fft.fftshift(np.fft.fft(fid))
-    return fid, spec
+    decay   = 1.0 / (lw_hz * np.pi)
+    fid     = amp * np.exp(1j * 2 * np.pi * freq_hz * t) * np.exp(-(t**2) / (2 * decay**2))
+    return _dccorr(fid, _ppm_axis(n, sw, hzppm, center_freq))
 
 
 def _build_mm_lipids(n, sw, hzppm, center_freq, one_proton_area):
     """
-    Build parametric Gaussian MM/Lip basis functions.
-    Translated directly from buildMMLipids() in createOspreyBasisSet.m
-    Wilson et al. MRM 2011.
+    Osprey's parametric Gaussian MM/Lip basis functions, as fit_makeBasis builds them
+    (Wilson et al. MRM 2011): each in proton equivalents of the one-proton area, against
+    the area of a unit Gaussian 0.1 ppm wide at 0 ppm; the sums DC-corrected as a whole.
     """
+    _, g0 = _make_gaussian(n, sw, hzppm, 0.0, 0.1 * hzppm, center_freq, 1.0)
+    g_area = np.sum(np.real(g0)) or 1.0
+
     def G(ppm_pos, fwhm_frac, n_prot):
-        # Normalise amplitude by area of a unit Gaussian
-        _, g0 = _make_gaussian(n, sw, hzppm, center_freq, 0.1 * hzppm, center_freq, 1.0)
-        g_area = np.sum(np.real(g0))
-        if g_area == 0:
-            g_area = 1.0
         amp = n_prot * one_proton_area / g_area
         return _make_gaussian(n, sw, hzppm, ppm_pos, fwhm_frac * hzppm, center_freq, amp)
+
+    def summed(*parts):
+        return _dccorr(sum(f for f, _ in parts), _ppm_axis(n, sw, hzppm, center_freq))
 
     f09, s09 = G(0.91, 0.14, 3)
     f12, s12 = G(1.21, 0.15, 2)
     f14, s14 = G(1.43, 0.17, 2)
     f17, s17 = G(1.67, 0.15, 2)
 
-    fa, sa = G(2.08, 0.15, 1.33)
-    fb, sb = G(2.25, 0.20, 0.33)
-    fc, sc = G(1.95, 0.15, 0.33)
-    fd, sd = G(3.00, 0.20, 0.40)
-    f20 = fa + fb + fc + fd
-    s20 = sa + sb + sc + sd
+    f20, s20 = summed(G(2.08, 0.15, 1.33), G(2.25, 0.20, 0.33), G(1.95, 0.15, 0.33), G(3.00, 0.20, 0.40))
 
     fl09, sl09 = G(0.89, 0.14, 3)
-
-    fl13a, sl13a = G(1.28, 0.15, 2)
-    fl13b, sl13b = G(1.28, 0.89, 2)
-    fl13 = fl13a + fl13b
-    sl13 = sl13a + sl13b
-
-    fl20a, sl20a = G(2.04, 0.15, 1.33)
-    fl20b, sl20b = G(2.25, 0.15, 0.67)
-    fl20c, sl20c = G(2.80, 0.20, 0.87)
-    fl20 = fl20a + fl20b + fl20c
-    sl20 = sl20a + sl20b + sl20c
+    fl13, sl13 = summed(G(1.28, 0.15, 2), G(1.28, 0.89, 2))
+    fl20, sl20 = summed(G(2.04, 0.15, 1.33), G(2.25, 0.15, 0.67), G(2.80, 0.20, 0.87))
 
     mm_fids  = np.column_stack([f09, f12, f14, f17, f20, fl09, fl13, fl20])
     mm_specs = np.column_stack([s09, s12, s14, s17, s20, sl09, sl13, sl20])
