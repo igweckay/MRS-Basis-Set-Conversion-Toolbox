@@ -189,3 +189,14 @@ def test_mrscloud_converted_to_basis_is_mrscloud_own_basis(tmp_path):
         scales.append(k)
         assert np.linalg.norm(b - k * a) < 1e-4 * np.linalg.norm(b), name
     assert np.allclose(scales, scales[0], rtol=1e-4)
+
+
+def test_spant_and_abfit_get_the_format_asked_for(tmp_path):
+    """spant and ABfit read a .BASIS (BasiC's recommended output for them) and .raw files."""
+    basis = _jmrui()
+    for tool in ('spant', 'abfit'):
+        for out_fmt, wanted in (('basis', ['basis_set.BASIS']), ('raw', ['Cr391.raw', 'NAA.raw'])):
+            outdir = tmp_path / tool / out_fmt
+            written = write_basis(basis, tool, out_fmt, str(outdir))
+
+            assert sorted(os.path.basename(p) for p in written) == wanted, (tool, out_fmt)

@@ -41,15 +41,16 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
         return paths
 
     if tool_id in ('spant', 'abfit'):
-        # SPANT uses LCModel .raw format
-        from writers.write_lcmodel import write_lcmodel
-        result = write_lcmodel(basis_list, outdir,
-                               mode='raw' if out_fmt != 'nifti' else 'raw',
-                               te=te, seq=seq)
+        # spant and ABfit read LCModel's .BASIS (recommended) and .raw, and NIfTI-MRS
         if out_fmt == 'nifti':
             from writers.write_niftimrs import write_niftimrs
             return write_niftimrs(basis_list, outdir)
-        return result.get('raw_files', [])
+        from writers.write_lcmodel import write_lcmodel
+        result = write_lcmodel(basis_list, outdir,
+                               mode='basis' if out_fmt == 'basis' else 'raw',
+                               te=te, seq=seq)
+        return result.get('raw_files', []) + \
+               ([result['basis_file']] if 'basis_file' in result else [])
 
     if tool_id == 'tarquin':
         from writers.write_lcmodel import write_lcmodel
