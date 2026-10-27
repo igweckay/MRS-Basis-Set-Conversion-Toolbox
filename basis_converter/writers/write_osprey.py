@@ -308,7 +308,7 @@ def write_osprey(basis_list, outpath,
         'nMM'           : float(n_mm_count),
         'fids'          : fids,
         'specs'         : specs,
-        'name'          : met_names,
+        'name'          : np.array(met_names, dtype=object).reshape(1, -1),   # a cell of strings, not padded chars
         'dims'          : dims,
         'nMets'         : float(n_mets_only),
         'sz'            : np.array([final_n, n_mets], dtype=np.uint16),

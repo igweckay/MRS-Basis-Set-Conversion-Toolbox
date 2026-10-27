@@ -200,3 +200,15 @@ def test_spant_and_abfit_get_the_format_asked_for(tmp_path):
             written = write_basis(basis, tool, out_fmt, str(outdir))
 
             assert sorted(os.path.basename(p) for p in written) == wanted, (tool, out_fmt)
+
+
+def test_osprey_names_are_a_cell_of_strings(tmp_path):
+    """Osprey finds its metabolites by strcmp on BASIS.name, a cell of strings in its own sets;
+    a char matrix pads the shorter names with blanks, 'NAA  ', which no strcmp finds."""
+    import numpy as np
+    import scipy.io as sio
+    written = write_basis(_jmrui(), 'osprey', 'mat', str(tmp_path))
+    names = sio.loadmat(written[0])['BASIS']['name'][0, 0]
+
+    assert names.dtype == object
+    assert {'NAA', 'Cr'} <= {str(np.ravel(n)[0]) for n in names.ravel()}
