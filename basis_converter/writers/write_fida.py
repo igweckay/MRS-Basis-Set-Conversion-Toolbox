@@ -132,7 +132,8 @@ def write_fida_file(core, outpath):
         'gamma'         : PROTON_GAMMA,
         't'             : t.reshape(-1, 1),
         'ppm'           : ppm.reshape(-1, 1),
-        'sz'            : np.array([n, 1]),
+        'sz'            : np.array([n, 1], dtype=float),    # double, as MATLAB's size() is: integer
+                                                            # arithmetic on it rounds FID-A's axes
         'te'            : te,
         'seq'           : seq,
         'sim'           : 'converted',

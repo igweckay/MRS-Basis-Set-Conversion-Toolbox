@@ -433,3 +433,18 @@ def test_a_macromolecule_the_set_brings_takes_osprey_own_place(tmp_path):
     written = fids[1:len(given) + 1, names.index('MM09')]                    # from the second point:
     scale = np.vdot(given, written) / np.vdot(given, given)                  # its DC correction
     assert np.linalg.norm(written - scale * given) < 1e-6 * np.linalg.norm(written)
+
+
+def test_matlab_structs_state_their_size_as_a_double(tmp_path):
+    """FID-A, MRSCloud and Osprey files hold one struct, stating sz as MATLAB's size() gives it, a
+    double: Osprey's fit_makeBasis loads one struct per file, and an integer sz rounds its arithmetic."""
+    import numpy as np
+    import scipy.io as sio
+    for tool in ('fida', 'mrscloud', 'osprey'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        path = write_basis(_jmrui(), tool, 'default', str(outdir), te=26.0)[0]
+        saved = {k: v for k, v in sio.loadmat(path, squeeze_me=True, struct_as_record=False).items()
+                 if not k.startswith('_')}
+        assert len(saved) == 1, tool
+        assert np.asarray(next(iter(saved.values())).sz).dtype == float, tool

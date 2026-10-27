@@ -3,9 +3,9 @@ writers/write_mrscloud.py
 Basis Set Converter — MRSCloud writer
 
 Writes core struct dicts to MRSCloud .mat format.
-MRSCloud stores one metabolite per .mat file.
+MRSCloud stores one metabolite per .mat file, in one struct, outA.
 
-MRSCloud .mat structure (confirmed from your documentation):
+MRSCloud .mat structure (confirmed from your documentation; outA.<field>):
     fids          - complex FID (n x 1)
     specs         - complex spectrum (n x 1)  fftshift(ifft(fids))
     spectralwidth - bandwidth in Hz
@@ -106,7 +106,7 @@ def write_mrscloud_file(core, outpath):
         'txfrq'        : txfrq,
         't'            : t.reshape(1, -1),
         'ppm'          : ppm.reshape(1, -1),
-        'sz'           : np.array([n, 1]),
+        'sz'           : np.array([n, 1], dtype=float),     # double, as MATLAB's size() is
         'name'         : name,
         'dims'         : dims,
         'flags'        : flags,
@@ -117,7 +117,7 @@ def write_mrscloud_file(core, outpath):
         'date'         : datetime.now().strftime('%d-%b-%Y'),
     }
 
-    sio.savemat(outpath, struct)
+    sio.savemat(outpath, {'outA': struct})     # one struct, as MRSCloud saves it (and fit_makeBasis loads)
 
 
 def write_mrscloud_folder(basis_list, outdir):
