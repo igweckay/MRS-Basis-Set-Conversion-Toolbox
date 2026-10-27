@@ -286,15 +286,13 @@ def _try_single_mat(path):
 
     keys = set(k for k in raw if not k.startswith('_'))
 
-    ############## ProFit: has 'basis' key with cell array fid + f0 field #############
-    # Check before Osprey since both use a 'basis' key
+    ############## ProFit: has 'basis' key with fid, met, bw, f0 #############
+    # Check before Osprey since both use a 'basis' key. The fields tell it: the fid is a cell
+    # array only from two metabolites on, as a 1x1 cell loads as the array it holds.
     if 'basis' in keys:
         b = raw.get('basis', {})
         b_keys = set(b.keys()) if isinstance(b, dict) else set()
-        import numpy as np
-        fid_val = b.get('fid') if isinstance(b, dict) else None
-        is_cell = fid_val is not None and np.asarray(fid_val).dtype == object
-        if {'fid', 'met', 'bw', 'f0'}.issubset(b_keys) and is_cell:
+        if {'fid', 'met', 'bw', 'f0'}.issubset(b_keys):
             return _read_and_return_profit(path)
 
     ############## Osprey: has 'BASIS' key with fids, spectralwidth, name #############

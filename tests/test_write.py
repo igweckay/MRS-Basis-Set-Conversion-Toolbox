@@ -448,3 +448,14 @@ def test_matlab_structs_state_their_size_as_a_double(tmp_path):
                  if not k.startswith('_')}
         assert len(saved) == 1, tool
         assert np.asarray(next(iter(saved.values())).sz).dtype == float, tool
+
+
+def test_a_profit_file_with_one_metabolite_is_profit(tmp_path):
+    """A 1x1 cell loads as the array it holds: ProFit is told by its fields, not by a cell array."""
+    import numpy as np
+    naa = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')
+    written = write_basis(naa, 'profit', 'default', str(tmp_path))
+    found = detect_format(written)
+
+    assert found['format'] == 'ProFit .mat'
+    assert np.allclose(load_basis(written, found['format'])[0]['fid'], naa[0]['fid'])
