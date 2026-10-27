@@ -44,7 +44,7 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
         # spant and ABfit read LCModel's .BASIS (recommended) and .raw, and NIfTI-MRS
         if out_fmt == 'nifti':
             from writers.write_niftimrs import write_niftimrs
-            return write_niftimrs(basis_list, outdir)
+            return write_niftimrs(basis_list, outdir, te=stated_te)
         from writers.write_lcmodel import write_lcmodel
         result = write_lcmodel(basis_list, outdir,
                                mode='basis' if out_fmt == 'basis' else 'raw',
@@ -62,7 +62,7 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
         out_file = os.path.join(outdir, 'basis.mat')
         if out_fmt == 'nifti':
             from writers.write_niftimrs import write_niftimrs
-            return write_niftimrs(basis_list, outdir)
+            return write_niftimrs(basis_list, outdir, te=stated_te)
         if out_fmt == 'basis':
             from writers.write_lcmodel import write_lcmodel
             result = write_lcmodel(basis_list, outdir, mode='basis', te=te, seq=seq)
@@ -86,7 +86,7 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
 
     if tool_id == 'niftimrs':
         from writers.write_niftimrs import write_niftimrs
-        return write_niftimrs(basis_list, outdir)
+        return write_niftimrs(basis_list, outdir, te=stated_te)
 
     if tool_id == 'marss':
         from writers.write_marss import (write_marss_folder,

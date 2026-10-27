@@ -311,3 +311,11 @@ def test_formats_without_a_centre_field_keep_a_stated_centre(tmp_path):
 
         for b, c in zip(basis, sorted(back, key=lambda c: [x['name'] for x in basis].index(c['name']))):
             assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max()), (tool, b['name'])
+
+
+def test_nifti_mrs_keeps_the_echo_time(tmp_path):
+    """NIfTI-MRS states the echo time (EchoTime, in s); spec2nii's raw route leaves it out, the
+    writer adds it, and it is read back in ms."""
+    written = write_basis(_jmrui(), 'niftimrs', 'default', str(tmp_path), te=26.0)
+
+    assert [b['te'] for b in load_basis(written, detect_format(written)['format'])] == [26.0, 26.0]

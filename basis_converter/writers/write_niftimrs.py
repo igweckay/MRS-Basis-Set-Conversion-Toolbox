@@ -7,6 +7,8 @@ format (.nii.gz) using the confirmed pipeline:
 
     core struct -> .raw (via write_lcmodel_raw) -> spec2nii -> .nii.gz -> fsl_mrs_proc conj -> _conj.nii.gz
 
+The echo time, which spec2nii's raw route does not store, is added to the header extension.
+
 Pipeline confirmed from:
     step_1_mat_to_raw.py    — MARSS .mat -> .raw
     step_2_batch_convert_raw_to_nifti.sh — .raw -> .nii.gz -> _conj.nii.gz
@@ -23,7 +25,7 @@ spec2nii parameters (hardcoded for now, made dynamic in screen 2):
     -f {name}       output filename stem
 
 Entry point:
-    write_niftimrs(basis_list, outdir) -> list of output .nii.gz paths
+    write_niftimrs(basis_list, outdir, te=None) -> list of output .nii.gz paths
 """
 
 import os
@@ -34,7 +36,7 @@ import numpy as np
 from writers.centre import fid_at_centre
 
 
-def write_niftimrs(basis_list, outdir):
+def write_niftimrs(basis_list, outdir, te=None):
     """
     Convert a list of core struct dicts to NIfTI-MRS .nii.gz files.
 
@@ -44,6 +46,8 @@ def write_niftimrs(basis_list, outdir):
         Each dict is a core struct with keys: fid, sw, sf, n, name, source
     outdir : str
         Output directory for .nii.gz files.
+    te : float or None
+        Echo time in ms, for basis functions that state none.
 
     Returns
     -------
@@ -65,6 +69,9 @@ def write_niftimrs(basis_list, outdir):
 
                 ############### Step 2: spec2nii raw -> .nii.gz ##############
                 nii_path = _run_spec2nii(raw_path, name, outdir, core)
+                echo_time = core.get('te') or te
+                if echo_time:
+                    _set_echo_time(nii_path, float(echo_time))
 
                 ############### Step 3: fsl_mrs_proc conj -> _conj.nii.gz ##############
                 conj_path = _run_conj(nii_path, outdir, name)
@@ -165,6 +172,24 @@ def _run_spec2nii(raw_path, name, outdir, core):
         )
 
     return nii_path
+
+
+def _set_echo_time(nii_path, te):
+    """
+    Store the echo time (ms) as EchoTime (s) in the NIfTI-MRS header extension:
+    spec2nii's raw route leaves it out. fsl_mrs_proc conj then carries it over.
+    """
+    import json
+    import nibabel as nib
+
+    img  = nib.load(nii_path)
+    ext  = next(e for e in img.header.extensions if e.get_code() == 44)
+    meta = json.loads(ext.get_content())
+    meta['EchoTime'] = te / 1000.0
+    out  = type(img)(np.asarray(img.dataobj), img.affine, header=img.header)
+    out.header.extensions.remove(next(e for e in out.header.extensions if e.get_code() == 44))
+    out.header.extensions.append(nib.nifti1.Nifti1Extension(44, json.dumps(meta).encode()))
+    nib.save(out, nii_path)
 
 
 ############### Step 3: fsl_mrs_proc conj ##############
