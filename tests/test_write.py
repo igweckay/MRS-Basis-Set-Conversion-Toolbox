@@ -258,3 +258,19 @@ def test_oxsa_lists_each_metabolite_where_it_is_strongest(tmp_path):
     path = write_basis(lac, 'oxsa', 'default', str(tmp_path))[0]
 
     assert abs(_oxsa_ppm(path)['Lac'] - 1.31) < 0.03
+
+
+def test_raw_files_keep_the_echo_time(tmp_path):
+    """LCModel's .raw states the echo time in $SEQPAR (ECHOT); it is written and read back."""
+    written = write_basis(_jmrui(), 'lcmodel', 'raw', str(tmp_path), te=26.0)
+
+    assert [b['te'] for b in load_basis(written, detect_format(written)['format'])] == [26.0, 26.0]
+
+
+def test_spinwizard_files_keep_the_frequency_they_state(tmp_path):
+    """A frequency passed to load_basis is for files that state none; SpinWizard's state theirs."""
+    folder = os.path.join(SAMPLES, 'SPINWIZARD')
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder) if '.' not in f)
+    basis = load_basis(files, 'SpinWizard', sw=2000.0, sf=63.9)
+
+    assert {(b['sw'], b['sf']) for b in basis} == {(4000.0, 123.2618)}

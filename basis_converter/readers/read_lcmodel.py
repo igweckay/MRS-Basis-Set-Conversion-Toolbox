@@ -192,6 +192,7 @@ def read_lcmodel_raw(path, name=None, sw=None, sf=None):
     hzpppm  = float(seqpar.get('HZPPPM', 0))
     nunfil  = int(float(seqpar.get('NUNFIL', 0)))
     deltat  = float(seqpar.get('DELTAT', 0))
+    echot   = float(seqpar['ECHOT']) if seqpar.get('ECHOT') else None
 
     ############## Find FID data after last $END #############
     last_end = text.upper().rfind('$END')
@@ -225,7 +226,7 @@ def read_lcmodel_raw(path, name=None, sw=None, sf=None):
         'sf'           : sf_out,
         'n'            : len(fid),
         'name'         : name,
-        'te'           : None,
+        'te'           : echot,
         'seq'          : None,
         'is_marss_raw' : is_marss_raw,
         'source'       : path,

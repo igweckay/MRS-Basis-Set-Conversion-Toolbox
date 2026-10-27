@@ -86,7 +86,7 @@ def write_lcmodel(basis_list, outdir, mode='both',
     result = {}
 
     if mode in ('raw', 'both'):
-        raw_files = write_lcmodel_raw_folder(basis_list, outdir)
+        raw_files = write_lcmodel_raw_folder([dict(c, te=c.get('te') or te) for c in basis_list], outdir)
         result['raw_files'] = raw_files
 
     if mode in ('basis', 'both'):
@@ -132,6 +132,8 @@ def write_lcmodel_raw(core, outpath):
         f.write(f" HZPPPM= {sf:.6f}\n")
         f.write(f" NUNFIL= {n}\n")
         f.write(f" DELTAT= {dwell:.12f}\n")
+        if core.get('te'):
+            f.write(f" ECHOT= {float(core['te']):.7f}\n")
         f.write(" $END\n")
 
         # $NMID block
