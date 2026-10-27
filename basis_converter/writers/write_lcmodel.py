@@ -212,8 +212,14 @@ def write_lcmodel_basis(basis_list, outpath,
     n     = int(first.get('n', len(first['fid'])))
     dwell = 1.0 / sw
 
+    # FWHMBA is in ppm, a basis' linewidth in Hz; a .BASIS read keeps the FWHMBA it stated (e.g. -1)
     stated      = first.get('linewidth')
-    linewidth   = 0.01 if stated is None else float(stated)
+    if stated is not None:
+        linewidth = float(stated) / sf
+    elif first.get('fwhmba') is not None:
+        linewidth = float(first['fwhmba'])
+    else:
+        linewidth = 0.01
     te_val      = float(te) if te is not None else 0.0
     date_str    = datetime.now().strftime('%d-%b-%Y')
     description = description or f"Basis set converted on {date_str}"

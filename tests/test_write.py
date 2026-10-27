@@ -274,3 +274,22 @@ def test_spinwizard_files_keep_the_frequency_they_state(tmp_path):
     basis = load_basis(files, 'SpinWizard', sw=2000.0, sf=63.9)
 
     assert {(b['sw'], b['sf']) for b in basis} == {(4000.0, 123.2618)}
+
+
+def test_a_basis_keeps_the_linewidth_lcmodel_reads_in_ppm(tmp_path):
+    """LCModel's FWHMBA is the basis' linewidth in ppm, a basis' linewidth is in Hz (FSL-MRS's
+    basis_width, FID-A's linewidth); a .BASIS read and written again states the FWHMBA it did."""
+    from readers.read_lcmodel import read_lcmodel_basis
+    from writers.write_lcmodel import write_lcmodel_basis
+    cows = os.path.join(SAMPLES, 'LCModel', 'BASIS_file', 'SLASER_Siemens26.basis')
+    basis = read_lcmodel_basis(cows)                           # FWHMBA= 9.99999978E-03
+    sf = basis[0]['sf']
+    assert abs(basis[0]['linewidth'] - 0.01 * sf) < 1e-6
+
+    def fwhmba(path):
+        return float(next(l for l in open(path) if 'FWHMBA' in l).split('=')[1].strip(' ,\n'))
+
+    write_lcmodel_basis([dict(b, linewidth=2.0) for b in basis], str(tmp_path / 'hz.BASIS'))
+    write_lcmodel_basis([dict(b, linewidth=None, fwhmba=-1.0) for b in basis], str(tmp_path / 'stated.BASIS'))
+    assert abs(fwhmba(tmp_path / 'hz.BASIS') - 2.0 / sf) < 1e-9
+    assert fwhmba(tmp_path / 'stated.BASIS') == -1.0

@@ -91,6 +91,8 @@ def read_lcmodel_basis(path):
     deltat  = float(seqpar.get('DELTAT', 0)) or float(seqpar.get('BADELT', 0))
     echot   = float(seqpar.get('ECHOT',  0)) or None
     seq     = seqpar.get('SEQ', '').strip("'\" ")
+    # FWHMBA is the basis' linewidth in ppm (-1 where unknown); kept as stated, and in Hz
+    fwhmba  = float(seqpar['FWHMBA']) if seqpar.get('FWHMBA') else None
 
     ############## Parse $BASIS1 block #############
     basis1  = _parse_namelist(text, 'BASIS1')
@@ -150,6 +152,8 @@ def read_lcmodel_basis(path):
             'name'   : metabo,
             'te'     : echot,
             'seq'    : seq if seq else None,
+            'linewidth': fwhmba * hzpppm if fwhmba and fwhmba > 0 else None,
+            'fwhmba' : fwhmba,
             'source' : path,
         })
         _log(f"  Loaded: {metabo}")
