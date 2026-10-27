@@ -20,10 +20,10 @@ import os
 import numpy as np
 import scipy.io as sio
 
-from writers.centre import fid_at_centre
+from writers.centre import CENTRE, fid_at_centre
 
 
-def write_inspector(basis_list, outpath, ppm_calib=4.675):
+def write_inspector(basis_list, outpath, ppm_calib=CENTRE):
     """
     Write all metabolites to a single INSPECTOR .mat file.
 
@@ -31,7 +31,7 @@ def write_inspector(basis_list, outpath, ppm_calib=4.675):
     ----------
     basis_list : list of core struct dicts
     outpath    : str, full path for output .mat file
-    ppm_calib  : float, water reference in ppm
+    ppm_calib  : float, water reference in ppm: 4.65, where the functions are written
     """
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)

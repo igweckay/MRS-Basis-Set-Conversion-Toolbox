@@ -44,7 +44,7 @@ def write_spinwizard(basis_list, outdir):
 
     for core in basis_list:
         name = core.get('name', 'unknown')
-        fid  = fid_at_centre(core)   # its functions are written at the centre BasisRFOffset states
+        fid  = fid_at_centre(core)   # at 4.65, the centre BasisRFOffset states
 
         # Output path — no extension, just the metabolite name
         outpath = os.path.join(outdir, name)
@@ -82,9 +82,9 @@ def write_spinwizard(basis_list, outdir):
         print(f"  Written: BasisSetParameters.txt  (sf={sf:.2f} MHz, sw={sw:.3f} kHz)")
 
     # Write BasisRFOffset.txt — ppmCalib
-    # (4.65, where a function stated another centre and was shifted to it)
-    shifted   = any(c.get('centerFreq') is not None for c in basis_list)
-    ppm_calib = CENTRE if shifted else (basis_list[0].get('ppmCalib') or CENTRE)
+    # (4.65, where the functions are written: fid_at_centre; a ppmCalib read is a label, MARSS's
+    # 4.675 sets are at 4.65)
+    ppm_calib = CENTRE
     offset_path = os.path.join(outdir, 'BasisRFOffset.txt')
     with open(offset_path, 'w') as f:
         f.write(f"  {ppm_calib:.4f}\n")

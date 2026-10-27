@@ -132,8 +132,8 @@ def write_osprey(basis_list, outpath,
             sw          = float(core['sw'])
             sf          = float(core['sf'])          # MHz
             n_native    = int(core['n'])
-            center_freq = float(core.get('centerFreq') or
-                                core.get('ppmCalib') or CENTRE)   # one stating none is at 4.65
+            # one stating none is at 4.65 (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
+            center_freq = float(core.get('centerFreq') or CENTRE)
 
         met_names.append(osp_name)
         met_fids.append(np.asarray(core['fid']).ravel().astype(complex))

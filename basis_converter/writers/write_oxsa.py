@@ -100,7 +100,7 @@ def write_oxsa(basis_list, outpath,
         # Dominant PPM: the literature line where the basis is strongest, or a fallback
         peaks = _peaks_at_ppms(np.asarray(core['fid']).ravel(), float(core.get('sf') or 123.26),
                                float(core.get('sw') or 4000.0), lit_lines,
-                               ppm_calib=float(core.get('ppmCalib') or VC)) if lit_lines else []
+                               ppm_calib=VC) if lit_lines else []
         dom_ppm = max(peaks, key=lambda p: p[1])[0] if peaks else _strongest_ppm(core, VC)
 
         lw_init   = LW_INIT.get(name, DEFAULT_LW_INIT)
@@ -121,7 +121,7 @@ def write_oxsa(basis_list, outpath,
     first     = basis_list[0]
     sf        = float(first.get('sf') or 123.26)
     sw        = float(first.get('sw') or 4000.0)
-    ppm_calib = float(first.get('ppmCalib') or VC)
+    ppm_calib = VC                               # (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
     source    = first.get('source', 'unknown')
     timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
@@ -368,7 +368,7 @@ def _strongest_ppm(core, default_calib):
     """Where a basis function without literature lines is strongest, between 0.5 and 4.3 ppm."""
     fid = np.asarray(core['fid']).ravel()
     sf, sw = float(core.get('sf') or 123.26), float(core.get('sw') or 4000.0)
-    ppm = float(core.get('ppmCalib') or default_calib) + np.fft.fftshift(np.fft.fftfreq(len(fid), 1.0 / sw)) / sf
+    ppm = float(default_calib) + np.fft.fftshift(np.fft.fftfreq(len(fid), 1.0 / sw)) / sf
     spec = np.abs(np.fft.fftshift(np.fft.fft(fid)))
     window = (ppm > 0.5) & (ppm < 4.3)
     return float(ppm[window][np.argmax(spec[window])])

@@ -50,7 +50,7 @@ def _get_peaks(basis_list, ppm_table):
         fid       = np.asarray(core['fid']).ravel()
         sf        = float(core.get('sf') or 123.26)
         sw        = float(core.get('sw') or 4000.0)
-        ppm_calib = float(core.get('ppmCalib') or VC)
+        ppm_calib = VC                           # (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
         lit_lines = _get_lit_ppms(name, ppm_table)
         peaks     = _peaks_at_ppms(fid, sf, sw, lit_lines, ppm_calib=ppm_calib)
         if peaks:

@@ -7,6 +7,8 @@ PPMSEP, FSL-MRS's nucleus default (for its .json and NIfTI-MRS), the centre jMRU
 ProFit, MARSS and SpinWizard are read at and the ppm axis the FID-A and MRSCloud writers
 store. A basis function stating another (centerFreq, e.g. 3.0 ppm in Osprey's own basis
 sets) is shifted by the difference before it is written, so its peaks stay at their ppm.
+A ppmCalib is not a centre: MARSS and SpinWizard files state 4.675, but their functions are
+at 4.65 (read there, NAA is at 2.008 ppm, creatine at 3.027 and 3.913, choline at 3.185).
 Used by write_lcmodel, write_niftimrs, write_fsLmrs, write_jmrui, write_fida, write_mrscloud,
 write_inspector, write_profit, write_marss and write_spinwizard,
 and, through at_centre, by the writers of prior knowledge (MIDAS, GAVA, VeSPA, PyAMARES, OXSA).

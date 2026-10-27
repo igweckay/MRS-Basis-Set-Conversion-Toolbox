@@ -356,3 +356,35 @@ def test_the_nifti_mrs_samples_are_the_simulation_the_others_hold():
     files = [os.path.join(SAMPLES, 'NIFTI-MRS', name) for name in ('NAA.nii.gz', 'Cr391.nii.gz')]
     for b, c in zip(_jmrui(), load_basis(files, 'NIfTI-MRS')):
         assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max()), b['name']
+
+
+def test_a_ppmcalib_is_not_taken_as_the_centre(tmp_path):
+    """MARSS files state a ppmCalib of 4.675, but their functions are at 4.65 (read there, NAA is at
+    2.008 ppm): Osprey and SpinWizard state 4.65 for them, and their priors are the jMRUI sample's,
+    which holds the same FIDs and states no ppmCalib."""
+    folder = os.path.join(SAMPLES, 'MARSS', 'basis_functions_metab_mm_mat')
+    marss = load_basis([os.path.join(folder, f'{name}.mat') for name in ('NAA', 'Cr391')], 'MARSS .mat')
+    assert {b['ppmCalib'] for b in marss} == {4.675}
+
+    (tmp_path / 'osprey').mkdir()
+    written = write_basis(marss, 'osprey', 'default', str(tmp_path / 'osprey'), te=26.0)
+    assert {b['centerFreq'] for b in load_basis(written, detect_format(written)['format'])} == {4.65}
+    (tmp_path / 'spinwizard').mkdir()
+    write_basis(marss, 'spinwizard', 'default', str(tmp_path / 'spinwizard'))
+    assert float(open(tmp_path / 'spinwizard' / 'BasisRFOffset.txt').read()) == 4.65
+
+    import re
+    import numpy as np
+    number = r'-?\d+\.\d+(?:[eE][-+]?\d+)?'
+
+    def priors(basis, tool):
+        """The text of the priors without paths and dates, and their numbers."""
+        outdir = tmp_path / f'{tool}_{basis[0]["source"].split(".")[-1]}'
+        outdir.mkdir()
+        path = write_basis(basis, tool, 'default', str(outdir))[0]
+        lines = [l for l in open(path).read().splitlines() if os.sep not in l and
+                 not any(w in l.lower() for w in ('source', 'date', 'time'))]
+        return [re.sub(number, '#', l) for l in lines], [float(x) for l in lines for x in re.findall(number, l)]
+    for tool in ('vespa_analysis', 'midas', 'gava', 'oxsa'):
+        (text, values), (text_j, values_j) = priors(marss, tool), priors(_jmrui(), tool)
+        assert text == text_j and np.allclose(values, values_j, rtol=1e-6, atol=1e-9), tool
