@@ -293,3 +293,21 @@ def test_a_basis_keeps_the_linewidth_lcmodel_reads_in_ppm(tmp_path):
     write_lcmodel_basis([dict(b, linewidth=None, fwhmba=-1.0) for b in basis], str(tmp_path / 'stated.BASIS'))
     assert abs(fwhmba(tmp_path / 'hz.BASIS') - 2.0 / sf) < 1e-9
     assert fwhmba(tmp_path / 'stated.BASIS') == -1.0
+
+
+def test_formats_without_a_centre_field_keep_a_stated_centre(tmp_path):
+    """INSPECTOR, ProFit, MARSS and SpinWizard store no ppm centre either and are read at 4.65:
+    a basis put at 3.0 ppm is shifted as for the others, so NAA stays at 2.01 ppm."""
+    import numpy as np
+    basis = _jmrui()
+    t = np.arange(len(basis[0]['fid'])) / basis[0]['sw']
+    moved = [dict(b, fid=b['fid'] * np.exp(2j * np.pi * 1.65 * b['sf'] * t), centerFreq=3.0) for b in basis]
+
+    for tool in ('inspector', 'profit', 'marss', 'spinwizard'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        written = write_basis(moved, tool, 'default', str(outdir))
+        back = load_basis(written, detect_format(written)['format'], sw=basis[0]['sw'], sf=basis[0]['sf'])
+
+        for b, c in zip(basis, sorted(back, key=lambda c: [x['name'] for x in basis].index(c['name']))):
+            assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max()), (tool, b['name'])

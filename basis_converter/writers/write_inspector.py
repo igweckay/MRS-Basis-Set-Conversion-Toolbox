@@ -20,6 +20,8 @@ import os
 import numpy as np
 import scipy.io as sio
 
+from writers.centre import fid_at_centre
+
 
 def write_inspector(basis_list, outpath, ppm_calib=4.675):
     """
@@ -53,7 +55,7 @@ def write_inspector(basis_list, outpath, ppm_calib=4.675):
     for i, core in enumerate(basis_list):
         name = str(core.get('name', f'Metab_{i+1:02d}'))
         lw   = 1.5 if core.get('linewidth') is None else float(core['linewidth'])
-        fid  = np.asarray(core['fid']).ravel().astype(complex)[:n]
+        fid  = fid_at_centre(core).astype(complex)[:n]   # INSPECTOR states no ppm centre: read at 4.65
         names.append(name)
         linewidths.append(lw)
         fid_matrix[:len(fid), i] = fid

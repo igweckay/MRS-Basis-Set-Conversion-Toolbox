@@ -29,6 +29,8 @@ import os
 import numpy as np
 import scipy.io as sio
 
+from writers.centre import fid_at_centre
+
 
 def write_marss_file(core, outpath):
     """
@@ -42,7 +44,7 @@ def write_marss_file(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid  = np.asarray(core['fid']).ravel().astype(complex)
+    fid  = fid_at_centre(core).astype(complex)   # MARSS states no ppm centre: read at 4.65
     sw   = float(core['sw'])
     sf   = float(core['sf'])
     n    = int(core.get('n', len(fid)))
@@ -117,7 +119,7 @@ def write_marss_combined(basis_list, outpath):
               for i, c in enumerate(basis_list)]
 
     fids = np.column_stack([
-        np.asarray(c['fid']).ravel().astype(complex)
+        fid_at_centre(c).astype(complex)
         for c in basis_list
     ])
 
