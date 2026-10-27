@@ -474,3 +474,19 @@ def test_a_writer_that_writes_nothing_says_so(tmp_path):
                 write_basis(_jmrui(), tool, 'raw' if tool == 'lcmodel' else 'default', str(outdir))
         finally:
             outdir.chmod(0o700)
+
+
+def test_the_osprey_sample_states_the_centre_it_is_at(tmp_path):
+    """The OSPREY sample is the COWS MARSS set, at 4.65 ppm: it states 4.65, and read there NAA is
+    at 2.008 ppm."""
+    import numpy as np
+    naa = next(b for b in load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')],
+                                     'Osprey .mat') if b['name'] == 'NAA')
+    fid, sw, sf = naa['fid'], naa['sw'], naa['sf']
+    n = 16 * len(fid)
+    spec = np.real(np.fft.fftshift(np.fft.ifft(fid * np.exp(-np.pi * np.arange(len(fid)) / sw), n)))
+    ppm = naa['centerFreq'] - np.fft.fftshift(np.fft.fftfreq(n, 1 / sw)) / sf
+    window = (ppm > 1.9) & (ppm < 2.1)
+
+    assert naa['centerFreq'] == 4.65
+    assert abs(ppm[window][np.argmax(spec[window])] - 2.008) < 0.003
