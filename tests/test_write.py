@@ -319,3 +319,15 @@ def test_nifti_mrs_keeps_the_echo_time(tmp_path):
     written = write_basis(_jmrui(), 'niftimrs', 'default', str(tmp_path), te=26.0)
 
     assert [b['te'] for b in load_basis(written, detect_format(written)['format'])] == [26.0, 26.0]
+
+
+def test_mrscloud_and_osprey_keep_the_linewidth(tmp_path):
+    """MRSCloud's outA.linewidth and Osprey's BASIS.linewidth (Hz) are written and read back."""
+    basis = [dict(b, linewidth=2.5) for b in _jmrui()]
+    for tool in ('mrscloud', 'osprey'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        written = write_basis(basis, tool, 'default', str(outdir), te=26.0)
+        back = load_basis(written, detect_format(written)['format'])
+
+        assert {b['linewidth'] for b in back if b['name'] in ('NAA', 'Cr391', 'Cr')} == {2.5}, tool

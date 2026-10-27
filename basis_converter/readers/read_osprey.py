@@ -15,6 +15,7 @@ Osprey .mat structure (top-level variable: BASIS):
     BASIS.te            - echo time in ms
     BASIS.seq           - sequence name cell array e.g. {'unedited'}
     BASIS.centerFreq    - center frequency in ppm
+    BASIS.linewidth     - linewidth in Hz, one for the set
     BASIS.name          - cell array of metabolite names (1 x nTotal)
     BASIS.nMets         - number of metabolites (MM/Lip excluded)
     BASIS.nMM           - number of MM/Lip/H2O components
@@ -39,6 +40,7 @@ Core struct returned per metabolite:
         'te'         : float, echo time in ms
         'seq'        : str, sequence name
         'centerFreq' : float, center frequency in ppm
+        'linewidth'  : float or None, linewidth in Hz (BASIS.linewidth)
         'Bo'         : float, field strength in Tesla
         'source'     : str, path to source file
     }
@@ -87,6 +89,10 @@ def read_osprey(path):
     Bo          = float(_get(basis, 'Bo', path))
     te          = float(_get(basis, 'te', path))
     center_freq = float(_get(basis, 'centerFreq', path))
+    try:                                   # one linewidth (Hz) for the set
+        linewidth = float(np.asarray(_get(basis, 'linewidth', path)).squeeze())
+    except RuntimeError:
+        linewidth = None
     sf          = Bo * PROTON_GAMMA    # MHz
 
     # Sequence — stored as cell array {'unedited'} or string
@@ -124,6 +130,7 @@ def read_osprey(path):
             'te'         : te,
             'seq'        : seq,
             'centerFreq' : center_freq,
+            'linewidth'  : linewidth,
             'Bo'         : Bo,
             'source'     : path,
         })
