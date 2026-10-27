@@ -331,3 +331,28 @@ def test_mrscloud_and_osprey_keep_the_linewidth(tmp_path):
         back = load_basis(written, detect_format(written)['format'])
 
         assert {b['linewidth'] for b in back if b['name'] in ('NAA', 'Cr391', 'Cr')} == {2.5}, tool
+
+
+def test_nifti_mrs_holds_the_fids_as_fsl_mrs_reads_them(tmp_path):
+    """NIfTI-MRS FIDs are the conjugate of a basis' own (FSL-MRS reads NAA at 2.01 ppm only
+    then): they are written conjugated, in the file the writer returns, and read back."""
+    import nibabel as nib
+    import numpy as np
+    basis = _jmrui()
+    written = write_basis(basis, 'niftimrs', 'default', str(tmp_path))
+
+    assert sorted(os.listdir(tmp_path)) == ['Cr391.json', 'Cr391.nii.gz', 'NAA.json', 'NAA.nii.gz']
+    for b, path in zip(basis, written):
+        stored = np.asarray(nib.load(path).dataobj).squeeze()
+        assert np.allclose(stored, np.conj(b['fid']), atol=1e-4 * np.abs(b['fid']).max())
+    for b, c in zip(basis, load_basis(written, detect_format(written)['format'])):
+        assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max())
+
+
+def test_the_nifti_mrs_samples_are_the_simulation_the_others_hold():
+    """The NIfTI-MRS sample set is the conjugated files of the conj step: read, they are the
+    jMRUI sample's FIDs."""
+    import numpy as np
+    files = [os.path.join(SAMPLES, 'NIFTI-MRS', name) for name in ('NAA.nii.gz', 'Cr391.nii.gz')]
+    for b, c in zip(_jmrui(), load_basis(files, 'NIfTI-MRS')):
+        assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max()), b['name']

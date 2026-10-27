@@ -5,17 +5,21 @@ Basis Set Converter — NIfTI-MRS writer
 Converts a list of core struct dicts (one per metabolite) to NIfTI-MRS
 format (.nii.gz) using the confirmed pipeline:
 
-    core struct -> .raw (via write_lcmodel_raw) -> spec2nii -> .nii.gz -> fsl_mrs_proc conj -> _conj.nii.gz
+    core struct -> .raw (via write_lcmodel_raw) -> spec2nii -> .nii.gz -> conjugated
 
-The echo time, which spec2nii's raw route does not store, is added to the header extension.
+NIfTI-MRS FIDs are the complex conjugate of a basis' own (FSL-MRS reads NAA at 2.01 ppm
+only then), as the conj step of step_2_batch_convert_raw_to_nifti.sh made them; the
+conjugation and the echo time, which spec2nii's raw route does not store, are applied to
+spec2nii's file in place. (fsl_mrs_proc conj --output takes a folder: it wrote its file
+into a folder named <name>_conj.nii.gz, or failed, and the unconjugated file was used.)
 
 Pipeline confirmed from:
     step_1_mat_to_raw.py    — MARSS .mat -> .raw
-    step_2_batch_convert_raw_to_nifti.sh — .raw -> .nii.gz -> _conj.nii.gz
+    step_2_batch_convert_raw_to_nifti.sh — .raw -> .nii.gz -> conjugated
 
 Requirements:
     spec2nii    — pip install spec2nii
-    fsl_mrs     — FSL-MRS installation
+    nibabel     — pip install nibabel
 
 spec2nii parameters (hardcoded for now, made dynamic in screen 2):
     -n 1H           nucleus
@@ -51,7 +55,7 @@ def write_niftimrs(basis_list, outdir, te=None):
 
     Returns
     -------
-    list of str — paths to output _conj.nii.gz files
+    list of str — paths to output .nii.gz files
     """
     os.makedirs(outdir, exist_ok=True)
 
@@ -69,15 +73,12 @@ def write_niftimrs(basis_list, outdir, te=None):
 
                 ############### Step 2: spec2nii raw -> .nii.gz ##############
                 nii_path = _run_spec2nii(raw_path, name, outdir, core)
-                echo_time = core.get('te') or te
-                if echo_time:
-                    _set_echo_time(nii_path, float(echo_time))
 
-                ############### Step 3: fsl_mrs_proc conj -> _conj.nii.gz ##############
-                conj_path = _run_conj(nii_path, outdir, name)
+                ############### Step 3: conjugate, add the echo time ##############
+                _finish(nii_path, core.get('te') or te)
 
-                output_paths.append(conj_path)
-                print(f"  Written: {os.path.basename(conj_path)}")
+                output_paths.append(nii_path)
+                print(f"  Written: {os.path.basename(nii_path)}")
 
             except Exception as ex:
                 failed.append(name)
@@ -174,10 +175,12 @@ def _run_spec2nii(raw_path, name, outdir, core):
     return nii_path
 
 
-def _set_echo_time(nii_path, te):
+############### Step 3: conjugate ##############
+
+def _finish(nii_path, te=None):
     """
-    Store the echo time (ms) as EchoTime (s) in the NIfTI-MRS header extension:
-    spec2nii's raw route leaves it out. fsl_mrs_proc conj then carries it over.
+    Conjugate the FIDs of spec2nii's file, as NIfTI-MRS holds them, and store the echo
+    time (ms) as EchoTime (s) in its header extension.
     """
     import json
     import nibabel as nib
@@ -185,71 +188,23 @@ def _set_echo_time(nii_path, te):
     img  = nib.load(nii_path)
     ext  = next(e for e in img.header.extensions if e.get_code() == 44)
     meta = json.loads(ext.get_content())
-    meta['EchoTime'] = te / 1000.0
-    out  = type(img)(np.asarray(img.dataobj), img.affine, header=img.header)
+    if te:
+        meta['EchoTime'] = float(te) / 1000.0
+    out  = type(img)(np.conj(np.asarray(img.dataobj)), img.affine, header=img.header)
     out.header.extensions.remove(next(e for e in out.header.extensions if e.get_code() == 44))
     out.header.extensions.append(nib.nifti1.Nifti1Extension(44, json.dumps(meta).encode()))
     nib.save(out, nii_path)
-
-
-############### Step 3: fsl_mrs_proc conj ##############
-
-def _run_conj(nii_path, outdir, name):
-    """
-    Run fsl_mrs_proc conj to conjugate the NIfTI-MRS file.
-    Matches step_2_batch_convert_raw_to_nifti.sh convention.
-
-    fsl_mrs_proc conj --file {input} --output {output_path}
-    Output filename: {name}_conj.nii.gz
-    """
-    conj_path = os.path.join(outdir, f"{name}_conj.nii.gz")
-
-    cmd = [
-        'fsl_mrs_proc', 'conj',
-        '--file',   nii_path,
-        '--output', conj_path,
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"fsl_mrs_proc conj failed for {name}:\n{result.stderr}"
-        )
-
-    # fsl_mrs_proc may write to outdir with a different naming convention
-    # Check for the expected file and common alternatives
-    candidates = [
-        conj_path,
-        os.path.join(outdir, f"{name}_conj.nii.gz"),
-        os.path.join(outdir, f"{name}.nii.gz"),  # some versions overwrite
-    ]
-    # Also search outdir for any new .nii.gz with name in it
-    for f in os.listdir(outdir):
-        full = os.path.join(outdir, f)
-        if name in f and f.endswith('.nii.gz') and full not in candidates:
-            candidates.append(full)
-
-    for candidate in candidates:
-        if os.path.isfile(candidate):
-            return candidate
-
-    raise RuntimeError(
-        f"fsl_mrs_proc ran but output not found. "
-        f"Expected: {conj_path}. "
-        f"Files in outdir: {os.listdir(outdir)}"
-    )
 
 
 ############### Dependency check ##############
 
 def check_dependencies():
     """
-    Check that spec2nii and fsl_mrs_proc are available.
+    Check that spec2nii is available.
     Returns list of missing tools.
     """
     missing = []
-    for tool in ['spec2nii', 'fsl_mrs_proc']:
+    for tool in ['spec2nii']:
         result = subprocess.run(
             ['which', tool],
             capture_output=True, text=True
@@ -284,7 +239,6 @@ if __name__ == '__main__':
     if missing:
         print(f"Missing tools: {', '.join(missing)}")
         print("Install with:  pip install spec2nii")
-        print("               pip install fsl-mrs")
         sys.exit(1)
 
     # Load basis functions

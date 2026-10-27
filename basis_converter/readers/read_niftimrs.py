@@ -9,6 +9,9 @@ NIfTI-MRS have metabolites along one of the higher dimensions.
 
 Requires: nibabel  (pip install nibabel)
 
+NIfTI-MRS FIDs are the complex conjugate of a basis' own (as FSL-MRS reads them, NAA at
+2.01 ppm): they are conjugated on reading, as write_niftimrs conjugates them on writing.
+
 NIfTI-MRS header JSON extension contains:
     SpectralWidth        - bandwidth in Hz
     TransmitterFrequency - Larmor frequency in MHz
@@ -103,6 +106,8 @@ def read_niftimrs(path):
     # Squeeze spatial dims (should all be 1 for basis sets)
     # Remaining dims after t are coils/averages/metabolites
     data_squeezed = data.squeeze()   # shape: (n,) or (n, metabs) etc.
+    # NIfTI-MRS FIDs are the complex conjugate of a basis' own (write_niftimrs)
+    data_squeezed = np.conj(data_squeezed)
 
     # Derive name from filename stem (strip _conj suffix if present)
     stem = os.path.splitext(os.path.splitext(os.path.basename(path))[0])[0]
