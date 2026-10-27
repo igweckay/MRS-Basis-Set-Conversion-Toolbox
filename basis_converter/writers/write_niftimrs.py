@@ -82,10 +82,13 @@ def write_niftimrs(basis_list, outdir, te=None):
 
             except Exception as ex:
                 failed.append(name)
+                reason = ex
                 print(f"  WARNING: failed for {name} — {ex}")
 
         if failed:
             print(f"\n  {len(failed)} metabolite(s) failed: {', '.join(failed)}")
+        if failed and not output_paths:
+            raise RuntimeError(f"Nothing written: every basis function failed, the last with: {reason}")
 
         print(f"\n  Done. {len(output_paths)} NIfTI-MRS files written to: {outdir}")
         return output_paths

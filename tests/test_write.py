@@ -459,3 +459,18 @@ def test_a_profit_file_with_one_metabolite_is_profit(tmp_path):
 
     assert found['format'] == 'ProFit .mat'
     assert np.allclose(load_basis(written, found['format'])[0]['fid'], naa[0]['fid'])
+
+
+def test_a_writer_that_writes_nothing_says_so(tmp_path):
+    """The writers that write a file per function carry on past one that fails, but not past all:
+    into a folder that cannot be written, none is written, and they say so."""
+    import pytest
+    for tool in ('fida', 'marss', 'mrscloud', 'fsLmrs', 'lcmodel'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        outdir.chmod(0o500)
+        try:
+            with pytest.raises(RuntimeError, match='Nothing written'):
+                write_basis(_jmrui(), tool, 'raw' if tool == 'lcmodel' else 'default', str(outdir))
+        finally:
+            outdir.chmod(0o700)

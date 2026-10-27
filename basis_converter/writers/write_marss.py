@@ -85,10 +85,13 @@ def write_marss_folder(basis_list, outdir):
             print(f"  Written: {name}.mat")
         except Exception as ex:
             failed.append(name)
+            reason = ex
             print(f"  WARNING: failed for {name} — {ex}")
 
     if failed:
         print(f"\n  {len(failed)} failed: {', '.join(failed)}")
+    if failed and not written:
+        raise RuntimeError(f"Nothing written: every basis function failed, the last with: {reason}")
     print(f"\n  Done. {len(written)} MARSS .mat files written to: {outdir}")
     return written
 
