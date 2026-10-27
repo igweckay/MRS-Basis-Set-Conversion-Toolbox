@@ -212,3 +212,13 @@ def test_osprey_names_are_a_cell_of_strings(tmp_path):
 
     assert names.dtype == object
     assert {'NAA', 'Cr'} <= {str(np.ravel(n)[0]) for n in names.ravel()}
+
+
+def test_vespa_priors_are_read_back(tmp_path):
+    """core.detect names a VeSPA .xml, and readers/read_vespa reads it; load_basis takes it too."""
+    basis = _jmrui()
+    written = write_basis(basis, 'vespa_analysis', 'default', str(tmp_path))
+    found = detect_format(written)
+
+    assert found['format'] == 'VeSPA .xml'
+    assert sorted(b['name'] for b in load_basis(written, found['format'])) == ['Cr391', 'NAA']
