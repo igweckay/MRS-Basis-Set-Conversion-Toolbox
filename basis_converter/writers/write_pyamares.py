@@ -29,6 +29,8 @@ import os
 import csv
 import numpy as np
 
+from writers.centre import at_centre
+
 
 ############## Default prior knowledge settings #############
 
@@ -76,6 +78,7 @@ def write_pyamares(basis_list, outpath,
     calib_name  : str, name of reference metabolite for ppmCalib calibration
     calib_omega : float, known chemical shift of reference metabolite in ppm
     """
+    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 

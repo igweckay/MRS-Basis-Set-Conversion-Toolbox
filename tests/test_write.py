@@ -222,3 +222,39 @@ def test_vespa_priors_are_read_back(tmp_path):
 
     assert found['format'] == 'VeSPA .xml'
     assert sorted(b['name'] for b in load_basis(written, found['format'])) == ['Cr391', 'NAA']
+
+
+def _oxsa_ppm(path):
+    """Each OXSA component's expected ppm, by metabolite."""
+    import re
+    blocks = open(path).read().split('c = struct();')[1:]
+    return {re.search(r"c\.metab\s*=\s*'([^']+)'", b).group(1):
+            float(re.search(r'c\.ppmExpected\s*=\s*([-0-9.eE+]+)', b).group(1)) for b in blocks}
+
+
+def test_prior_writers_keep_a_stated_centre(tmp_path):
+    """The priors read peaks off the spectrum at 4.65 ppm: a basis put at 3.0 ppm (Osprey's and
+    MRSCloud's sets) is shifted first, so NAA is listed at 2.01 ppm."""
+    import numpy as np
+    naa = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')[0]
+    t = np.arange(len(naa['fid'])) / naa['sw']
+    moved = dict(naa, fid=naa['fid'] * np.exp(2j * np.pi * 1.65 * naa['sf'] * t), centerFreq=3.0)
+
+    for tool in ('pyamares', 'oxsa'):
+        (tmp_path / tool).mkdir()
+        for core, label in ((naa, 'stated none'), (moved, 'at 3.0')):
+            path = write_basis([core], tool, 'default', str(tmp_path / tool))[0]
+            if tool == 'pyamares':
+                rows = {r.split(',')[0]: r.split(',')[1:] for r in open(path).read().splitlines()[:6]}
+                ppm = float(rows['chemicalshift'][0])
+            else:
+                ppm = _oxsa_ppm(path)['NAA']
+            assert abs(ppm - 2.008) < 0.01, (tool, label, ppm)
+
+
+def test_oxsa_lists_each_metabolite_where_it_is_strongest(tmp_path):
+    """OXSA gets one component per metabolite: lactate's is its 1.31 ppm doublet, not the quartet."""
+    lac = load_basis([os.path.join(SAMPLES, 'JMRUI', 'Lac.txt')], 'jMRUI .txt')
+    path = write_basis(lac, 'oxsa', 'default', str(tmp_path))[0]
+
+    assert abs(_oxsa_ppm(path)['Lac'] - 1.31) < 0.03

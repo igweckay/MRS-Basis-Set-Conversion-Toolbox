@@ -37,6 +37,8 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import scipy.io as sio
 
+from writers.centre import at_centre
+
 
 ############## Literature chemical shift table (from metabList.mat) #############
 # Loaded dynamically from metabList.mat if available, otherwise uses hardcoded
@@ -98,6 +100,7 @@ def write_vespa(basis_list, outpath,
     source         : str, source description
     metablist_path : str or None, path to metabList.mat for literature shifts
     """
+    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 

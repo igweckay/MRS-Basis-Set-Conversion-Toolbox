@@ -35,6 +35,8 @@ from datetime import datetime
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
+from writers.centre import at_centre
+
 
 PPM_CALIB = 4.65
 
@@ -73,6 +75,7 @@ def write_midas(basis_list, outpath,
     seqte          : float, echo time in ms
     metablist_path : str or None, path to metabList.mat
     """
+    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 

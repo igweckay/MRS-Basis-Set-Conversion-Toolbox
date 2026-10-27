@@ -29,6 +29,8 @@ import os
 import numpy as np
 from datetime import datetime
 
+from writers.centre import at_centre
+
 
 def write_gava(basis_list, outpath,
                seqte=26.0,
@@ -43,6 +45,7 @@ def write_gava(basis_list, outpath,
     seqte          : float, echo time in ms
     metablist_path : str or None, path to metabList.mat
     """
+    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 
