@@ -61,6 +61,9 @@ def write_mrscloud_file(core, outpath):
     name  = str(core.get('name', 'unknown'))
     Bo    = core.get('Bo') or (sf / 42.577)
     txfrq = sf * 1e6                 # MHz → Hz
+    # FID-A's te and seq, which MRSCloud's own files leave out but fit_makeBasis reads of each file
+    te    = float(core['te']) if core.get('te') else 0.0
+    seq   = str(core.get('seq') or 'unedited')
 
     dt    = 1.0 / sw
     # MRSCloud uses ifft convention for specs
@@ -108,6 +111,8 @@ def write_mrscloud_file(core, outpath):
         'ppm'          : ppm.reshape(1, -1),
         'sz'           : np.array([n, 1], dtype=float),     # double, as MATLAB's size() is
         'name'         : name,
+        'te'           : te,
+        'seq'          : seq,
         'dims'         : dims,
         'flags'        : flags,
         'averages'     : 1.0,

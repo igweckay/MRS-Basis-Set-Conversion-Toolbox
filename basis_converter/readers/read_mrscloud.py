@@ -30,6 +30,7 @@ Core struct returned:
         'name'   : str, metabolite name
         'Bo'     : float, field strength in Tesla
         'linewidth' : float or None, linewidth in Hz (as FID-A's)
+        'te'     : float or None, echo time in ms (FID-A's te, if the file holds one)
         'source' : str, path to source file
     }
 
@@ -63,6 +64,8 @@ def read_mrscloud_file(path, name=None):
     sf    = txfrq / 1e6
     lw    = _get_optional(s, 'linewidth', default=None)
     lw    = None if lw is None else float(np.asarray(lw).squeeze())
+    te    = _get_optional(s, 'te', default=None)          # FID-A's, ms; MRSCloud's own files hold none
+    te    = None if te is None else (float(np.asarray(te).squeeze()) or None)
 
     # name field is present in MRSCloud (unlike FID-A)
     if name is None:
@@ -80,6 +83,7 @@ def read_mrscloud_file(path, name=None):
         'name'   : name,
         'Bo'     : Bo,
         'linewidth': lw,
+        'te'     : te,
         'centerFreq': _centre(s),
         'source' : path,
     }

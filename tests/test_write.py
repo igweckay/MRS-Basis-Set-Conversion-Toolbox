@@ -607,6 +607,18 @@ def test_an_osprey_set_changed_since_basic_wrote_it_is_read_as_osprey_holds_it(t
     assert {'NAA', 'Cr', 'H2O'} <= set(back) and back['H2O']['water_ref']
 
 
+def test_mrscloud_files_hold_the_fields_fit_makebasis_reads(tmp_path):
+    """Osprey's fit_makeBasis reads FID-A's te and seq of each file, which MRSCloud's own files
+    leave out: written, an MRSCloud file holds them, and its echo time is read back."""
+    import scipy.io as sio
+    basis = [dict(b, te=26.0) for b in _jmrui()]
+    written = write_basis(basis, 'mrscloud', 'default', str(tmp_path))
+
+    out = sio.loadmat(written[0], simplify_cells=True)['outA']
+    assert out['seq'] == 'unedited' and out['te'] == 26.0
+    assert [b['te'] for b in load_basis(written, 'MRSCloud .mat')] == [b['te'] for b in basis]
+
+
 def test_osprey_water_is_two_protons_beside_the_metabolites(tmp_path):
     """Osprey scales the data to its metabolites' peak, and its own sets peak in a metabolite: the
     synthetic H2O is two protons by area, below them, so the set is not normalised to the water."""
