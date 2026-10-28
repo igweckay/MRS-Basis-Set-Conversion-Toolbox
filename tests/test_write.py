@@ -490,3 +490,18 @@ def test_the_osprey_sample_states_the_centre_it_is_at(tmp_path):
 
     assert naa['centerFreq'] == 4.65
     assert abs(ppm[window][np.argmax(spec[window])] - 2.008) < 0.003
+
+
+def test_osprey_water_is_two_protons_beside_the_metabolites(tmp_path):
+    """Osprey scales the data to its metabolites' peak, and its own sets peak in a metabolite: the
+    synthetic H2O is two protons by area, below them, so the set is not normalised to the water."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'NAA', 'GPC')], 'jMRUI .txt')
+    names, _, specs, ppm = _osprey(basis, tmp_path)
+    peaks = np.max(np.real(specs), axis=0)
+    water, cr = np.real(specs[:, names.index('H2O')]), np.real(specs[:, names.index('Cr')])
+
+    assert max(peaks[names.index(n)] for n in ('Cr', 'NAA', 'GPC')) == peaks.max() == 1.0
+    singlet = cr[(ppm > 3.027 - 0.1) & (ppm < 3.027 + 0.1)].sum()            # three protons
+    assert abs(water.sum() / singlet / (2 / 3) - 1) < 0.15

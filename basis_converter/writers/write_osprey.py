@@ -197,9 +197,12 @@ def write_osprey(basis_list, outpath,
     ############# Step 7: Add synthetic H2O #############
     if 'H2O' not in met_names:
         print("\n  Adding synthetic H2O Lorentzian at 4.68 ppm.")
-        amp = max(2 * one_proton_area,
-                  np.max(np.abs(np.real(specs))) * 0.05) if one_proton_area > 0 \
-              else np.max(np.abs(np.real(specs))) * 0.05
+        # two protons by area, as Osprey's MM/Lip Gaussians are (its own sets' H2O is below their
+        # metabolites); an amplitude of two one-proton areas made it some 40 times their height,
+        # and the set, normalised to it, then fitted at 1/40 of Osprey's scale
+        _, unit = _make_lorentzian(final_n, sw, hzppm, 4.68, 0.1 * hzppm, center_freq, 1.0)
+        amp = 2 * one_proton_area / np.sum(np.real(unit)) if one_proton_area > 0 \
+              else 0.05 * np.max(np.real(specs)) / np.max(np.real(unit))
         h2o_fid, h2o_spec = _make_lorentzian(
             final_n, sw, hzppm, 4.68, 0.1 * hzppm, center_freq, amp
         )
