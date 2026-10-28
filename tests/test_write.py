@@ -508,6 +508,25 @@ def test_the_osprey_sample_states_the_centre_it_is_at(tmp_path):
     assert abs(ppm[window][np.argmax(spec[window])] - 2.008) < 0.003
 
 
+def test_the_osprey_sample_holds_creatine_and_water_as_osprey_does(tmp_path):
+    """The OSPREY sample is the MARSS set as the Osprey writer writes it: its Cr and PCr hold the CH3
+    and the CH2 (three protons to two), and its H2O is below its metabolites."""
+    import numpy as np
+    basis = {b['name']: b for b in load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')],
+                                              'Osprey .mat')}
+    def spectrum(b):
+        fid, sw, sf = b['fid'], b['sw'], b['sf']
+        ppm = b['centerFreq'] - np.fft.fftshift(np.fft.fftfreq(len(fid), 1 / sw)) / sf
+        return np.real(np.fft.fftshift(np.fft.ifft(fid * np.exp(-np.pi * np.arange(len(fid)) / sw)))), ppm
+
+    for name in ('Cr', 'PCr'):
+        spec, ppm = spectrum(basis[name])
+        ch3, ch2 = (spec[(ppm > c - 0.1) & (ppm < c + 0.1)].sum() for c in (3.027, 3.913))
+        assert abs(ch3 / ch2 / (3 / 2) - 1) < 0.15, name
+    peak = lambda name: spectrum(basis[name])[0].max()
+    assert peak('H2O') < max(peak(n) for n in ('NAA', 'Cr', 'PCh'))
+
+
 def test_osprey_water_is_two_protons_beside_the_metabolites(tmp_path):
     """Osprey scales the data to its metabolites' peak, and its own sets peak in a metabolite: the
     synthetic H2O is two protons by area, below them, so the set is not normalised to the water."""
