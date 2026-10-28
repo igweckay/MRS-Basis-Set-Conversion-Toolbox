@@ -48,9 +48,9 @@ def test_a_basis_survives_a_round_trip(tmp_path):
                          for name in ('NAA.txt', 'Cr391.txt')], first)
     write_lcmodel_basis(read_lcmodel_basis(first), second)
 
-    # equal to print precision (6E13.5): the zero-filled half's rounding moves last digits
+    # equal in double precision (4E25.16)
     for a, b in zip(read_lcmodel_basis(first), read_lcmodel_basis(second)):
-        assert np.linalg.norm(a['fid'] - b['fid']) < 1e-5 * np.linalg.norm(a['fid'])
+        assert np.linalg.norm(a['fid'] - b['fid']) < 1e-13 * np.linalg.norm(a['fid'])
 
 
 def test_a_basis_is_read_by_its_detected_format_without_the_gui():
@@ -112,18 +112,18 @@ def test_a_basis_is_written_as_spant_reads_it(tmp_path):
     assert int(seen['NDATAB'][0]) == 2 * len(naa['fid'])   # zero-filled, as MakeBasis
     assert float(seen['HZPPPM'][0].rstrip(',')) == float(naa['sf'])
     assert float(seen['BADELT'][0].rstrip(',')) == 1 / float(naa['sw'])
-    assert seen['FMTBAS'][0] == "'(6E13.5)',"
+    assert seen['FMTBAS'][0] == "'(4E25.16)',"
     assert seen['ID'] == [f"'{naa['name']}',", "'Cr',"]
 
 
 def test_a_basis_is_written_in_the_fixed_columns_lcmodel_reads(tmp_path):
-    """FMTBAS (6E13.5) is a Fortran format: six fields of exactly 13 characters, no
-    separator; LCModel reads a line with blanks between values as shifted numbers."""
+    """FMTBAS (4E25.16) is a Fortran format: four fields of exactly 25 characters, which
+    LCModel reads by column, and spant and TARQUIN by the blanks between them."""
     naa = read_jmrui_file(os.path.join(SAMPLES, 'JMRUI', 'NAA.txt'))
     out = str(tmp_path / 'naa.BASIS')
     write_lcmodel_basis([naa], out)
 
     data = open(out).read().split('$END')[-1].splitlines()[1:]
-    assert all(len(line) % 13 == 0 and len(line) <= 78 for line in data)
-    columns = [float(line[i:i + 13]) for line in data for i in range(0, len(line), 13)]
+    assert all(len(line) % 25 == 0 and len(line) <= 100 for line in data)
+    columns = [float(line[i:i + 25]) for line in data for i in range(0, len(line), 25)]
     assert columns == [float(v) for line in data for v in line.split()]

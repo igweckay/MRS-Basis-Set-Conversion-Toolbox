@@ -55,7 +55,7 @@ def write_spinwizard(basis_list, outdir):
         # Write — tab separated, matching SpinWizard style
         with open(outpath, 'w') as f:
             for row in data:
-                f.write(f"  {row[0]:20.10e}\t\t  {row[1]:20.10e}\n")
+                f.write(f"  {row[0]:24.16e}\t\t  {row[1]:24.16e}\n")   # double precision
 
         written.append(outpath)
         names.append(name)

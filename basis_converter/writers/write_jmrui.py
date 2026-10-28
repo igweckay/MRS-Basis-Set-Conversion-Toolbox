@@ -127,10 +127,10 @@ def write_jmrui(
         f.write('Signal and FFT\n')
         f.write('sig(real)\tsig(imag)\tfft(real)\tfft(imag)\n')
         f.write(f'Signal 1 out of 1 in file\n')
-        for row in RF:
+        for row in RF:                                  # in double precision: 17 digits
             f.write(
-                f'{row[0]:.8E}\t{row[1]:.8E}\t'
-                f'{row[2]:.8E}\t{row[3]:.8E}\n'
+                f'{row[0]:.16E}\t{row[1]:.16E}\t'
+                f'{row[2]:.16E}\t{row[3]:.16E}\n'
             )
 
 

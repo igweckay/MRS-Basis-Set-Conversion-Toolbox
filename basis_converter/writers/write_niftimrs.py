@@ -123,14 +123,14 @@ def _write_raw(core, raw_path):
         f.write(" $END\n")
         f.write(" $NMID\n")
         f.write(f" ID='{core['name']}'\n")
-        f.write(" FMTDAT='(8E13.5)'\n")
+        f.write(" FMTDAT='(4E25.16)'\n")
         f.write(" VOLUME=   1.00000E+00\n")
         f.write(" TRAMP=    1.00000E+00\n")
         f.write(" $END\n")
 
-        for i in range(0, len(vals), 8):
-            chunk = vals[i:i + 8]
-            f.write(" ".join(f"{v:+.5E}" for v in chunk) + "\n")
+        for i in range(0, len(vals), 4):
+            chunk = vals[i:i + 4]
+            f.write("".join(f"{v:25.16E}" for v in chunk) + "\n")
 
 
 ############### Step 2: spec2nii ##############

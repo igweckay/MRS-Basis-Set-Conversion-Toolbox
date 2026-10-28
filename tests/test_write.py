@@ -547,6 +547,22 @@ def test_the_osprey_sample_holds_creatine_and_water_as_osprey_does(tmp_path):
     assert peak('H2O') < max(peak(n) for n in ('NAA', 'Cr', 'PCh'))
 
 
+def test_text_formats_keep_a_basis_in_double_precision(tmp_path):
+    """.BASIS, .raw, NIfTI-MRS (written by spec2nii from a .raw), jMRUI and SpinWizard files are
+    text, or made from text: written with 17 digits, they give back the FIDs they were given."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'MARSS', 'basis_functions_metab_mm_mat')
+    basis = load_basis([os.path.join(folder, f'{name}.mat') for name in ('NAA', 'GPC')], 'MARSS .mat')
+    for tool, fmt in [('lcmodel', 'basis'), ('lcmodel', 'raw'), ('niftimrs', 'default'),
+                      ('jmrui', 'default'), ('spinwizard', 'default')]:
+        written = write_basis(basis, tool, fmt, str(tmp_path / f'{tool}_{fmt}'), te=26.0)
+        back = {b['name']: b for b in load_basis(written, detect_format(written)['format'],
+                                                  sw=basis[0]['sw'], sf=basis[0]['sf'])}
+        for b in basis:
+            a, c = np.asarray(b['fid']), np.asarray(back[b['name']]['fid'])[:len(b['fid'])]
+            assert np.linalg.norm(c - a) < 1e-12 * np.linalg.norm(a), (tool, fmt, b['name'])
+
+
 def test_osprey_water_is_left_out_of_other_formats_as_osprey_exports_them(tmp_path):
     """Osprey's H2O is for its water-reference fit: kept in an Osprey .mat, and left out of the
     formats other tools fit with, as Osprey's io_writelcmBASIS and io_writeTarquinBASIS leave it out."""

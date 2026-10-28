@@ -15,11 +15,11 @@ Writes basis set to LCModel format:
     $END
     $NMID
      ID='{name}'
-     FMTDAT='(8E13.5)'
+     FMTDAT='(4E25.16)'
      VOLUME=   1.00000E+00
      TRAMP=    1.00000E+00
     $END
-    {real} {-imag} ...   <-  8 values per line, imaginary sign flipped
+    {real} {-imag} ...   <-  4 values per line, imaginary sign flipped, in double precision
 
 .BASIS file format (confirmed from your SLASER_Siemens26.basis):
     $SEQPAR
@@ -30,7 +30,7 @@ Writes basis set to LCModel format:
     $END
     $BASIS1
      IDBASI='{description}'
-     FMTBAS='(6E13.5)'
+     FMTBAS='(4E25.16)'   <- double precision: 17 digits, where (6E13.5) keeps 6
      BADELT=  {1/sw}
      NDATAB=  {2n}
     $END
@@ -139,15 +139,15 @@ def write_lcmodel_raw(core, outpath):
         # $NMID block
         f.write(" $NMID\n")
         f.write(f" ID='{name}'\n")
-        f.write(" FMTDAT='(8E13.5)'\n")
+        f.write(" FMTDAT='(4E25.16)'\n")
         f.write(" VOLUME=   1.00000E+00\n")
         f.write(" TRAMP=    1.00000E+00\n")
         f.write(" $END\n")
 
-        # FID data — 8 values per line
-        for i in range(0, len(vals), 8):
-            chunk = vals[i:i + 8]
-            f.write(" ".join(f"{v:+.5E}" for v in chunk) + "\n")
+        # FID data — 4 values per line, in FMTDAT's fixed 25-character fields
+        for i in range(0, len(vals), 4):
+            chunk = vals[i:i + 4]
+            f.write("".join(f"{v:25.16E}" for v in chunk) + "\n")
 
 
 def write_lcmodel_raw_folder(basis_list, outdir):
@@ -241,7 +241,7 @@ def write_lcmodel_basis(basis_list, outpath,
         ######################## $BASIS1 block #######################
         f.write(" $BASIS1\n")
         f.write(f" IDBASI = '{description[:80]}',\n")
-        f.write(" FMTBAS = '(6E13.5)',\n")
+        f.write(" FMTBAS = '(4E25.16)',\n")
         f.write(f" BADELT = {dwell:.8E},\n")
         f.write(f" NDATAB = {2 * n}\n")   # zero-filled to 2n, as MakeBasis
         f.write(" \n")
@@ -307,16 +307,18 @@ def write_lcmodel_basis(basis_list, outpath,
 
             # Spectrum data — LCModel reads this block as the frequency-domain spectrum:
             # the orthonormal FFT of the FID in .raw orientation (imaginary sign flipped),
-            # zero-filled to 2n, as MakeBasis writes it. Interleaved real / imag, 6 per line.
+            # zero-filled to 2n, as MakeBasis writes it. Interleaved real / imag, 4 per line.
             spec = np.fft.fft(np.conj(fid), n=2 * len(fid), norm='ortho')
             vals = []
             for z in spec:
                 vals.extend([z.real, z.imag])
 
-            for i in range(0, len(vals), 6):
-                chunk = vals[i:i + 6]
-                # fixed-width fields, no separator: FMTBAS (6E13.5) reads 13 characters each
-                f.write("".join(f"{v:13.5E}" for v in chunk) + "\n")
+            for i in range(0, len(vals), 4):
+                chunk = vals[i:i + 4]
+                # fixed-width fields: FMTBAS (4E25.16) reads 25 characters each, in double
+                # precision; spant takes the count from FMTBAS's first digit and reads by blanks,
+                # TARQUIN reads a real and its imaginary part from one line
+                f.write("".join(f"{v:25.16E}" for v in chunk) + "\n")
 
     print(f"  Written: {os.path.basename(outpath)} "
           f"({len(basis_list)} metabolites)")
