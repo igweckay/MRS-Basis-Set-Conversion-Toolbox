@@ -124,8 +124,8 @@ def test_osprey_creatines_hold_both_their_parts(tmp_path):
     basis = load_basis([os.path.join(SAMPLES, 'JMRUI', f'{p}.txt') for p in parts], 'jMRUI .txt')
     fid = {b['name']: b['fid'] for b in basis}
 
-    written = write_basis(basis, 'osprey', 'mat', str(tmp_path))
-    back = {b['name']: b['fid'] for b in load_basis(written, detect_format(written)['format'])}
+    names, fids, _, _ = _osprey(basis, tmp_path)                    # as Osprey reads the .mat
+    back = dict(zip(names, fids.T))
 
     assert 'CrCH2' not in back
     for name, summed in (('Cr', fid['Cr391'] + fid['CrNo391']), ('PCr', fid['PCr393'] + fid['PCrNo393'])):
@@ -577,6 +577,34 @@ def test_osprey_water_is_left_out_of_other_formats_as_osprey_exports_them(tmp_pa
         names = [b['name'] for b in load_basis(written, detect_format(written)['format'])]
         assert 'H2O' not in names and 'NAA' in names
     assert 'H2O' in [b['name'] for b in load_basis(osp, 'Osprey .mat')]
+
+
+def test_a_set_written_for_osprey_reads_back_as_it_was_given(tmp_path):
+    """Osprey's model changes a set (its names, creatine's parts summed, the first point, the scale)
+    and adds to it (MM, lipids, water); the .mat holds the set as given, which is read back."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'MARSS', 'basis_functions_metab_mm_mat')
+    files = [os.path.join(folder, f) for f in sorted(os.listdir(folder)) if f.endswith('.mat')]
+    basis = load_basis(files, 'MARSS .mat')
+    for add_mm in (True, False):
+        written = write_basis(basis, 'osprey', 'mat', str(tmp_path / str(add_mm)), te=26.0, add_mm=add_mm)
+        back = load_basis(written, 'Osprey .mat')
+
+        assert [b['name'] for b in back] == [b['name'] for b in basis]
+        for a, b in zip(basis, back):
+            assert np.array_equal(np.asarray(a['fid']), b['fid']) and not b['water_ref']
+
+
+def test_an_osprey_set_changed_since_basic_wrote_it_is_read_as_osprey_holds_it(tmp_path):
+    import numpy as np
+    import scipy.io as sio
+    written = write_basis(_jmrui(), 'osprey', 'mat', str(tmp_path), te=26.0)[0]
+    mat = sio.loadmat(written)
+    mat['BASIS'][0, 0]['fids'][:, 0] *= 2
+    sio.savemat(written, {'BASIS': mat['BASIS']})
+
+    back = {b['name']: b for b in load_basis([written], 'Osprey .mat')}
+    assert {'NAA', 'Cr', 'H2O'} <= set(back) and back['H2O']['water_ref']
 
 
 def test_osprey_water_is_two_protons_beside_the_metabolites(tmp_path):

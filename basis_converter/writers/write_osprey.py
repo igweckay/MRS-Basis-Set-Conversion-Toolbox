@@ -21,7 +21,8 @@ Pipeline:
     9. Optionally add Osprey's MM/Lip Gaussians (op_gaussianPeak) for missing components
    10. Reorder: metabolites first, MM/Lip/H2O last
    11. Normalize: divide by max(real(specs)), Osprey's BASIS.scale
-   12. Assemble and save BASIS struct as .mat
+   12. Assemble and save BASIS struct as .mat, with the set as BasiC was given it (BASIS.BasiC,
+       which Osprey does not read), so that read back the set is the one given
 
 Entry point:
     write_osprey(basis_list, outpath, target_n, add_mm, te, sequence)
@@ -306,6 +307,7 @@ def write_osprey(basis_list, outpath,
         'nMets'         : float(n_mets_only),
         'sz'            : np.array([final_n, n_mets], dtype=float),   # double, as MATLAB's size() is
         'scale'         : scale_factor,
+        'BasiC'         : _given(basis_list, fids),
     }
 
     ############# Step 12: Save #############
@@ -320,6 +322,21 @@ def write_osprey(basis_list, outpath,
     print(f"  Bo    : {Bo:.3f} T")
     print(f"  Names : {', '.join(met_names)}")
     print(f"{'='*45}")
+
+
+def _given(basis_list, fids):
+    """The set as BasiC was given it: what Osprey's model changes (names, creatine's parts, the
+    first point, the scale) and what it adds (MM, lipids, water) undone, read back. The names, the
+    FIDs (zero-filled to the longest) and their lengths, and the sum of each function's magnitude
+    as written, by which the reader tells that the functions are still those it wrote."""
+    n = [len(np.ravel(c['fid'])) for c in basis_list]
+    given = np.zeros((max(n), len(n)), dtype=complex)
+    for k, c in enumerate(basis_list):
+        given[:n[k], k] = np.ravel(c['fid'])
+    return {'name' : np.array([c['name'] for c in basis_list], dtype=object).reshape(1, -1),
+            'fids' : given,
+            'n'    : np.array(n, dtype=float),
+            'check': np.sum(np.abs(fids), axis=0)}
 
 
 ############# Helper functions (translated from MATLAB) #############
