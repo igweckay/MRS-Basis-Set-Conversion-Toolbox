@@ -86,7 +86,7 @@ MM_LIP_SCALING = {
 
 # Osprey MM/Lip names — used for reordering
 MM_NAMES = {'MM09','MM12','MM14','MM17','MM20',
-            'Lip09','Lip13','Lip20','H2O'}
+            'Lip09','Lip13','Lip20','H2O','MM'}
 
 
 ############# Main entry point #############
@@ -102,7 +102,9 @@ def write_osprey(basis_list, outpath,
         Each dict must have: fid, sw, sf, n, name
     outpath    : str, full path for output .mat file
     target_n   : int, target spectral points (0 = native size)
-    add_mm     : bool, add parametric MM/Lip for missing components
+    add_mm     : bool, fit_makeBasis's addMMFlag: add Osprey's MM/Lip for missing components, in
+                 place of a set's composite MM, and rescale the set's own; False keeps the set's
+                 MM as they are and adds none (the H2O Osprey's water fit takes is added either way)
     te         : float, echo time in ms
     sequence   : str, e.g. 'unedited'
     """
@@ -121,7 +123,9 @@ def write_osprey(basis_list, outpath,
         stem     = SHORT.get(core['name'], core['name'])
         osp_name = NAME_MAP.get(stem, stem)   # use original name if not in map
 
-        if osp_name == 'SKIP':
+        if osp_name == 'SKIP' and not add_mm:     # nothing takes its place: kept, as it is named
+            osp_name = stem
+        elif osp_name == 'SKIP':
             print(f"  Skipping (SKIP): {stem}")
             continue
 
@@ -183,7 +187,7 @@ def write_osprey(basis_list, outpath,
     one_proton_area = _cr_area(specs, met_names, ppm_axis, Bo) / 3
 
     ############# Step 6: Rescale MM/Lip to proton-equivalent amplitudes #############
-    if one_proton_area > 0:
+    if one_proton_area > 0 and add_mm:
         print("\n  Rescaling MM/Lip basis functions:")
         for kk, name in enumerate(met_names):
             if name in MM_LIP_SCALING:
@@ -194,7 +198,7 @@ def write_osprey(basis_list, outpath,
                     fids[:, kk]  *= scale
                     specs[:, kk] *= scale
                     print(f"    {name:8s}: scale={scale:.4f}  ({n_prot} proton-equiv)")
-    else:
+    elif add_mm:
         print("  WARNING: oneProtonArea=0; MM/Lip functions will NOT be rescaled.")
 
     ############# Step 7: Add synthetic H2O #############

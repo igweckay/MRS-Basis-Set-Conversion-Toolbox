@@ -10,7 +10,7 @@ Used by the GUI (screen4_convert.py) and by scripts, without a GUI.
 import os
 
 
-def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
+def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=True):
     """
     Write basis functions using the appropriate writer.
 
@@ -22,6 +22,7 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
     outdir     : str, the output folder
     te         : float or None, echo time in ms (30 if None; 26 for OXSA)
     seq        : str or None, sequence name ('unedited' if None)
+    add_mm     : bool, Osprey only: add Osprey's MM and lipids, as fit_makeBasis's addMMFlag
 
     Returns
     -------
@@ -67,7 +68,7 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
             from writers.write_lcmodel import write_lcmodel
             result = write_lcmodel(basis_list, outdir, mode='basis', te=te, seq=seq)
             return [result.get('basis_file', '')]
-        write_osprey(basis_list, out_file, te=float(te or 30))
+        write_osprey(basis_list, out_file, add_mm=add_mm, te=float(te or 30))
         return [out_file]
 
     if tool_id == 'fsLmrs':

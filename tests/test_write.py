@@ -451,6 +451,26 @@ def test_creatine_parts_named_as_lcmodel_keeps_them_are_summed_for_osprey(tmp_pa
         assert abs(ch3 / ch2 / (3 / 2) - 1) < 0.15, name
 
 
+def test_osprey_macromolecules_can_be_left_out_as_fit_makebasis_leaves_them(tmp_path):
+    """add_mm=False is fit_makeBasis's addMMFlag 0: the set's own MM and MM09 are kept as they are, none
+    of Osprey's MM and lipids are added; the H2O Osprey's water fit takes is still there."""
+    import numpy as np
+    import scipy.io as sio
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'NAA', 'MM', 'MM09')],
+                       'jMRUI .txt')
+    path = write_basis(basis, 'osprey', 'mat', str(tmp_path), te=26.0, add_mm=False)[0]
+    b = sio.loadmat(path, squeeze_me=True, struct_as_record=False)['BASIS']
+    names = [str(n) for n in np.ravel(b.name)]
+
+    assert sorted(names) == ['Cr', 'H2O', 'MM', 'MM09', 'NAA'] and b.flags.addedMM == 0
+    given = {x['name']: np.asarray(x['fid'])[1:] for x in basis}
+    scale = np.vdot(given['NAA'], b.fids[1:, names.index('NAA')]) / np.vdot(given['NAA'], given['NAA'])
+    for name in ('MM', 'MM09'):                                          # unscaled: as NAA is
+        written = b.fids[1:, names.index(name)]
+        assert np.linalg.norm(written - scale * given[name]) < 1e-6 * np.linalg.norm(written), name
+
+
 def test_matlab_structs_state_their_size_as_a_double(tmp_path):
     """FID-A, MRSCloud and Osprey files hold one struct, stating sz as MATLAB's size() gives it, a
     double: Osprey's fit_makeBasis loads one struct per file, and an integer sz rounds its arithmetic."""
