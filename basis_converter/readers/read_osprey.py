@@ -123,9 +123,9 @@ def read_osprey(path):
 
     given = _given(basis, fids_raw)
     if given:                                  # the set BasiC was given, as it was given
-        names, n_of, fids_raw = given
+        names, n_of, fids_raw, water = given
     else:
-        n_of = [n] * n_total
+        n_of, water = [n] * n_total, [name == 'H2O' for name in names]
 
     ############## Build one core struct per metabolite #############
     results = []
@@ -144,7 +144,7 @@ def read_osprey(path):
             'linewidth'  : linewidth,
             'Bo'         : Bo,
             'source'     : path,
-            'water_ref'  : name == 'H2O' and not given,
+            'water_ref'  : bool(water[i]),
         })
         _log(f"  Loaded: {name}")
 
@@ -214,8 +214,9 @@ def _get(struct, field, path):
 
 
 def _given(basis, fids):
-    """The names, lengths and FIDs of the set BasiC was given, if BasiC wrote the file and its
-    functions are still those it wrote (each one's summed magnitude as written); else None."""
+    """The names, lengths and FIDs of the set BasiC was given, and which was an Osprey set's
+    water, if BasiC wrote the file and its functions are still those it wrote (each one's summed
+    magnitude as written); else None."""
     try:
         record = _get(basis, 'BasiC', '')
         check = np.ravel(np.asarray(_get(record, 'check', ''), dtype=float))
@@ -229,7 +230,11 @@ def _given(basis, fids):
     given = np.asarray(_get(record, 'fids', ''))
     if given.ndim == 1:
         given = given.reshape(-1, 1)
-    return names, lengths, given
+    try:
+        water = [bool(v) for v in np.ravel(np.asarray(_get(record, 'water', '')))]
+    except RuntimeError:
+        water = [False] * len(names)
+    return names, lengths, given, water
 
 
 def _unpack_cell_string(val):

@@ -327,8 +327,9 @@ def write_osprey(basis_list, outpath,
 def _given(basis_list, fids):
     """The set as BasiC was given it: what Osprey's model changes (names, creatine's parts, the
     first point, the scale) and what it adds (MM, lipids, water) undone, read back. The names, the
-    FIDs (zero-filled to the longest) and their lengths, and the sum of each function's magnitude
-    as written, by which the reader tells that the functions are still those it wrote."""
+    FIDs (zero-filled to the longest) and their lengths, which of them was an Osprey set's water,
+    and the sum of each function's magnitude as written, by which the reader tells that the
+    functions are still those it wrote."""
     n = [len(np.ravel(c['fid'])) for c in basis_list]
     given = np.zeros((max(n), len(n)), dtype=complex)
     for k, c in enumerate(basis_list):
@@ -336,6 +337,7 @@ def _given(basis_list, fids):
     return {'name' : np.array([c['name'] for c in basis_list], dtype=object).reshape(1, -1),
             'fids' : given,
             'n'    : np.array(n, dtype=float),
+            'water': np.array([bool(c.get('water_ref')) for c in basis_list], dtype=float),
             'check': np.sum(np.abs(fids), axis=0)}
 
 

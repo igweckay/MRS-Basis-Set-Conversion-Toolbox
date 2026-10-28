@@ -595,6 +595,17 @@ def test_a_set_written_for_osprey_reads_back_as_it_was_given(tmp_path):
             assert np.array_equal(np.asarray(a['fid']), b['fid']) and not b['water_ref']
 
 
+def test_an_osprey_set_written_for_osprey_again_keeps_its_water_out_of_other_formats(tmp_path):
+    """An Osprey set's H2O, read back from the .mat BasiC wrote of it, is still Osprey's water."""
+    basis = load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')], 'Osprey .mat')
+    mat = write_basis(basis, 'osprey', 'mat', str(tmp_path / 'osp'), te=26.0)
+    back = load_basis(mat, 'Osprey .mat')
+    assert [b['water_ref'] for b in back] == [b['water_ref'] for b in basis] and any(b['water_ref'] for b in back)
+
+    lcm = write_basis(back, 'lcmodel', 'basis', str(tmp_path / 'lcm'))
+    assert 'H2O' not in [b['name'] for b in load_basis(lcm, 'LCModel .BASIS')]
+
+
 def test_an_osprey_set_changed_since_basic_wrote_it_is_read_as_osprey_holds_it(tmp_path):
     import numpy as np
     import scipy.io as sio
