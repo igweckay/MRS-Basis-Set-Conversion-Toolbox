@@ -74,8 +74,8 @@ def write_niftimrs(basis_list, outdir, te=None):
                 ############### Step 2: spec2nii raw -> .nii.gz ##############
                 nii_path = _run_spec2nii(raw_path, name, outdir, core)
 
-                ############### Step 3: conjugate, add the echo time ##############
-                _finish(nii_path, core.get('te') or te)
+                ############### Step 3: conjugate, add the echo time and the linewidth ##############
+                _finish(nii_path, core.get('te') or te, core.get('linewidth'))
 
                 output_paths.append(nii_path)
                 print(f"  Written: {os.path.basename(nii_path)}")
@@ -180,10 +180,11 @@ def _run_spec2nii(raw_path, name, outdir, core):
 
 ############### Step 3: conjugate ##############
 
-def _finish(nii_path, te=None):
+def _finish(nii_path, te=None, linewidth=None):
     """
     Conjugate the FIDs of spec2nii's file, as NIfTI-MRS holds them, and store the echo
-    time (ms) as EchoTime (s) in its header extension.
+    time (ms) as EchoTime (s) in its header extension, and the linewidth (Hz) as BasisLinewidth,
+    a user-defined key (the standard defines none for it).
     """
     import json
     import nibabel as nib
@@ -193,6 +194,9 @@ def _finish(nii_path, te=None):
     meta = json.loads(ext.get_content())
     if te:
         meta['EchoTime'] = float(te) / 1000.0
+    if linewidth is not None:                  # a user-defined key, as the standard defines one
+        meta['BasisLinewidth'] = {'Value': float(linewidth),
+                                  'Description': 'Linewidth of the basis functions, Hz'}
     out  = type(img)(np.conj(np.asarray(img.dataobj)), img.affine, header=img.header)
     out.header.extensions.remove(next(e for e in out.header.extensions if e.get_code() == 44))
     out.header.extensions.append(nib.nifti1.Nifti1Extension(44, json.dumps(meta).encode()))

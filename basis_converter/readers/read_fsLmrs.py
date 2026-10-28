@@ -15,7 +15,7 @@ FSL-MRS .json structure (confirmed from your documentation):
     basis_name   - metabolite name string
 
 Optional:
-    meta         - dict with time, SimVersion etc.
+    meta         - dict with time, SimVersion etc.; EchoTime (s) where BasiC wrote one
 
 Note:
     - basis_centre is sf in MHz; no ppm reference is stored (centerFreq None)
@@ -99,6 +99,8 @@ def read_fsLmrs_file(path):
     name = str(basis_name).strip("'\" ") if basis_name else \
            os.path.splitext(os.path.basename(path))[0]
 
+    te_s = (data.get('meta') or {}).get('EchoTime')
+
     return {
         'fid'        : fid,
         'sw'         : sw,
@@ -107,6 +109,7 @@ def read_fsLmrs_file(path):
         'name'       : name,
         'centerFreq' : None,
         'linewidth'  : float(basis_width) if basis_width is not None else None,
+        'te'         : float(te_s) * 1000.0 if te_s else None,
         'source'     : path,
     }
 

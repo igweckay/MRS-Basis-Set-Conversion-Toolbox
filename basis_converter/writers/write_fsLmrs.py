@@ -18,7 +18,9 @@ FSL-MRS .json structure (confirmed from your documentation):
         },
         "meta": {
             "time"      : "YYYYMMDD_HHMMSS",
-            "SimVersion": "Converted by basis_set_converter"
+            "SimVersion": "Converted by basis_set_converter",
+            "EchoTime"  : echo time in seconds, as NIfTI-MRS states it, where the set states one
+                          (the basis has no field for it; FSL-MRS does not read meta)
         }
     }
 
@@ -78,6 +80,8 @@ def write_fsLmrs_file(core, outpath):
             "SimVersion" : "Converted by basis_set_converter",
         }
     }
+    if core.get('te'):
+        data["meta"]["EchoTime"] = float(core['te']) / 1000.0
 
     with open(outpath, 'w') as f:
         json.dump(data, f, indent=4)

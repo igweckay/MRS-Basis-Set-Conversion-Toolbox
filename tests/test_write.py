@@ -630,6 +630,16 @@ def test_mrscloud_files_hold_the_fields_fit_makebasis_reads(tmp_path):
     assert [b['te'] for b in load_basis(written, 'MRSCloud .mat')] == [b['te'] for b in basis]
 
 
+def test_fsl_mrs_keeps_the_echo_time_and_nifti_mrs_the_linewidth(tmp_path):
+    """Neither format has a field for them: FSL-MRS's meta, which FSL-MRS does not read, holds the
+    echo time (EchoTime, s, as NIfTI-MRS states it), and a user-defined NIfTI-MRS key the linewidth."""
+    basis = [dict(b, te=26.0, linewidth=2.5) for b in _jmrui()]
+    for tool, field in (('fsLmrs', 'te'), ('niftimrs', 'linewidth')):
+        written = write_basis(basis, tool, 'default', str(tmp_path / tool), te=26.0)
+        back = load_basis(written, detect_format(written)['format'])
+        assert [b[field] for b in back] == [b[field] for b in basis], tool
+
+
 def test_osprey_water_is_two_protons_beside_the_metabolites(tmp_path):
     """Osprey scales the data to its metabolites' peak, and its own sets peak in a metabolite: the
     synthetic H2O is two protons by area, below them, so the set is not normalised to the water."""

@@ -16,6 +16,7 @@ NIfTI-MRS header JSON extension contains:
     SpectralWidth        - bandwidth in Hz
     TransmitterFrequency - Larmor frequency in MHz
     EchoTime             - echo time in seconds (convert to ms)
+    BasisLinewidth       - linewidth in Hz, a user-defined key BasiC writes
     ResonantNucleus      - '1H'
     dim_5, dim_6, dim_7  - dimension labels (e.g. 'DIM_COIL', 'DIM_USER_0')
 
@@ -89,6 +90,8 @@ def read_niftimrs(path):
 
     te_s = meta.get('EchoTime', None)
     te   = float(te_s) * 1000.0 if te_s is not None else None
+    lw   = meta.get('BasisLinewidth')                        # a user-defined key: Value, Description
+    lw   = lw.get('Value') if isinstance(lw, dict) else lw
 
     if sw == 0:
         raise RuntimeError(
@@ -141,6 +144,7 @@ def read_niftimrs(path):
             'n'      : len(fid),
             'name'   : name,
             'te'     : te,
+            'linewidth': None if lw is None else float(lw),
             'source' : path,
         })
         _log(f"  Loaded: {name}")
