@@ -547,6 +547,22 @@ def test_the_osprey_sample_holds_creatine_and_water_as_osprey_does(tmp_path):
     assert peak('H2O') < max(peak(n) for n in ('NAA', 'Cr', 'PCh'))
 
 
+def test_osprey_water_is_left_out_of_other_formats_as_osprey_exports_them(tmp_path):
+    """Osprey's H2O is for its water-reference fit: kept in an Osprey .mat, and left out of the
+    formats other tools fit with, as Osprey's io_writelcmBASIS and io_writeTarquinBASIS leave it out."""
+    basis = load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')], 'Osprey .mat')
+    assert 'H2O' in [b['name'] for b in basis]
+
+    lcm = write_basis(basis, 'lcmodel', 'basis', str(tmp_path / 'lcm'))
+    fsl = write_basis(basis, 'fsLmrs', 'default', str(tmp_path / 'fsl'))
+    osp = write_basis(basis, 'osprey', 'mat', str(tmp_path / 'osp'), te=26.0)
+
+    for written in (lcm, fsl):
+        names = [b['name'] for b in load_basis(written, detect_format(written)['format'])]
+        assert 'H2O' not in names and 'NAA' in names
+    assert 'H2O' in [b['name'] for b in load_basis(osp, 'Osprey .mat')]
+
+
 def test_osprey_water_is_two_protons_beside_the_metabolites(tmp_path):
     """Osprey scales the data to its metabolites' peak, and its own sets peak in a metabolite: the
     synthetic H2O is two protons by area, below them, so the set is not normalised to the water."""

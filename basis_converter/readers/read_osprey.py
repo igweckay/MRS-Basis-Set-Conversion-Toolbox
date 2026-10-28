@@ -43,6 +43,7 @@ Core struct returned per metabolite:
         'linewidth'  : float or None, linewidth in Hz (BASIS.linewidth)
         'Bo'         : float, field strength in Tesla
         'source'     : str, path to source file
+        'water_ref'  : bool, Osprey's H2O, for its water-reference fit only
     }
 
 Entry point:
@@ -133,6 +134,7 @@ def read_osprey(path):
             'linewidth'  : linewidth,
             'Bo'         : Bo,
             'source'     : path,
+            'water_ref'  : name == 'H2O',
         })
         _log(f"  Loaded: {name}")
 
