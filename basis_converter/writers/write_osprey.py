@@ -69,6 +69,9 @@ NAME_MAP = {
 # (its CrCH2 is a negative CH2 correction term), so the parts are summed into one
 PARTS = {'Cr391', 'CrNo391', 'PCr393', 'PCrNo393'}
 
+# names as LCModel keeps them, six characters (an FSL-MRS set from a .BASIS holds CrNo39, PCrNo3)
+SHORT = {k[:6]: k for k in NAME_MAP if len(k) > 6}
+
 # MM/Lip proton-equivalent counts for rescaling
 MM_LIP_SCALING = {
     'MM09'  : 3,
@@ -115,7 +118,7 @@ def write_osprey(basis_list, outpath,
     sw = sf = n_native = center_freq = None
 
     for core in basis_list:
-        stem     = core['name']
+        stem     = SHORT.get(core['name'], core['name'])
         osp_name = NAME_MAP.get(stem, stem)   # use original name if not in map
 
         if osp_name == 'SKIP':

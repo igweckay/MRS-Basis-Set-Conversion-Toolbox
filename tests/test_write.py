@@ -435,6 +435,22 @@ def test_a_macromolecule_the_set_brings_takes_osprey_own_place(tmp_path):
     assert np.linalg.norm(written - scale * given) < 1e-6 * np.linalg.norm(written)
 
 
+def test_creatine_parts_named_as_lcmodel_keeps_them_are_summed_for_osprey(tmp_path):
+    """The FSL-MRS sample names creatine's parts as LCModel keeps names, six characters (CrNo39,
+    PCrNo3): they are still the parts Osprey's Cr and PCr are summed from, CH3 and CH2 in one."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'FSL-MRS')
+    basis = load_basis([os.path.join(folder, f'{p}.json') for p in ('Cr391', 'CrNo39', 'PCr393', 'PCrNo3')],
+                       'FSL-MRS .json')
+    names, _, specs, ppm = _osprey(basis, tmp_path)
+
+    assert 'CrNo39' not in names and 'PCrNo3' not in names
+    for name in ('Cr', 'PCr'):
+        spec = np.real(specs[:, names.index(name)])
+        ch3, ch2 = (spec[(ppm > c - 0.1) & (ppm < c + 0.1)].sum() for c in (3.027, 3.913))
+        assert abs(ch3 / ch2 / (3 / 2) - 1) < 0.15, name
+
+
 def test_matlab_structs_state_their_size_as_a_double(tmp_path):
     """FID-A, MRSCloud and Osprey files hold one struct, stating sz as MATLAB's size() gives it, a
     double: Osprey's fit_makeBasis loads one struct per file, and an integer sz rounds its arithmetic."""
