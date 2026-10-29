@@ -384,7 +384,7 @@ def test_a_ppmcalib_is_not_taken_as_the_centre(tmp_path):
         outdir.mkdir()
         path = write_basis(basis, tool, 'default', str(outdir))[0]
         lines = [l for l in open(path).read().splitlines() if os.sep not in l and
-                 not any(w in l.lower() for w in ('source', 'date', 'time'))]
+                 not any(w in l.lower() for w in ('source', 'date', 'time', 'created', 'generated'))]
         return [re.sub(number, '#', l) for l in lines], [float(x) for l in lines for x in re.findall(number, l)]
     for tool in ('vespa_analysis', 'midas', 'gava', 'oxsa'):
         (text, values), (text_j, values_j) = priors(marss, tool), priors(_jmrui(), tool)
