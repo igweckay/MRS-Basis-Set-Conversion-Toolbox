@@ -15,6 +15,7 @@ Osprey .mat structure (top-level variable: BASIS):
     BASIS.te            - echo time in ms
     BASIS.seq           - sequence name cell array e.g. {'unedited'}
     BASIS.centerFreq    - center frequency in ppm
+    BASIS.linewidth     - linewidth in Hz, one for the set
     BASIS.name          - cell array of metabolite names (1 x nTotal)
     BASIS.nMets         - number of metabolites (MM/Lip excluded)
     BASIS.nMM           - number of MM/Lip/H2O components
@@ -29,6 +30,10 @@ Note on specs convention:
     Osprey uses fftshift(fft(fids)) — NOT ifft.
     This differs from FID-A which uses fftshift(ifft(fids)).
 
+A .mat BasiC wrote holds the set as BasiC was given it (BASIS.BasiC): while its functions are
+those written, that set is read, as it was given; Osprey's names, creatine, first point, scale,
+MM, lipids and water undone.
+
 Core struct returned per metabolite:
     {
         'fid'        : np.ndarray, complex, shape (n,)
@@ -39,8 +44,10 @@ Core struct returned per metabolite:
         'te'         : float, echo time in ms
         'seq'        : str, sequence name
         'centerFreq' : float, center frequency in ppm
+        'linewidth'  : float or None, linewidth in Hz (BASIS.linewidth)
         'Bo'         : float, field strength in Tesla
         'source'     : str, path to source file
+        'water_ref'  : bool, Osprey's H2O, for its water-reference fit only
     }
 
 Entry point:
@@ -87,6 +94,10 @@ def read_osprey(path):
     Bo          = float(_get(basis, 'Bo', path))
     te          = float(_get(basis, 'te', path))
     center_freq = float(_get(basis, 'centerFreq', path))
+    try:                                   # one linewidth (Hz) for the set
+        linewidth = float(np.asarray(_get(basis, 'linewidth', path)).squeeze())
+    except RuntimeError:
+        linewidth = None
     sf          = Bo * PROTON_GAMMA    # MHz
 
     # Sequence — stored as cell array {'unedited'} or string
@@ -110,22 +121,30 @@ def read_osprey(path):
             f"FID columns ({n_total}) in {os.path.basename(path)}"
         )
 
+    given = _given(basis, fids_raw)
+    if given:                                  # the set BasiC was given, as it was given
+        names, n_of, fids_raw, water = given
+    else:
+        n_of, water = [n] * n_total, [name == 'H2O' for name in names]
+
     ############## Build one core struct per metabolite #############
     results = []
     for i, name in enumerate(names):
-        fid = fids_raw[:, i].astype(complex)
+        fid = fids_raw[:n_of[i], i].astype(complex)
 
         results.append({
             'fid'        : fid,
             'sw'         : sw,
             'sf'         : sf,
-            'n'          : n,
+            'n'          : n_of[i],
             'name'       : name,
             'te'         : te,
             'seq'        : seq,
             'centerFreq' : center_freq,
+            'linewidth'  : linewidth,
             'Bo'         : Bo,
             'source'     : path,
+            'water_ref'  : bool(water[i]),
         })
         _log(f"  Loaded: {name}")
 
@@ -192,6 +211,30 @@ def _get(struct, field, path):
     raise RuntimeError(
         f"Unrecognized BASIS struct format in {os.path.basename(path)}"
     )
+
+
+def _given(basis, fids):
+    """The names, lengths and FIDs of the set BasiC was given, and which was an Osprey set's
+    water, if BasiC wrote the file and its functions are still those it wrote (each one's summed
+    magnitude as written); else None."""
+    try:
+        record = _get(basis, 'BasiC', '')
+        check = np.ravel(np.asarray(_get(record, 'check', ''), dtype=float))
+    except RuntimeError:
+        return None
+    if len(check) != fids.shape[1] or not np.allclose(np.sum(np.abs(fids), axis=0), check,
+                                                      rtol=1e-12, atol=0):
+        return None
+    names = _unpack_names(_get(record, 'name', ''))
+    lengths = [int(v) for v in np.ravel(np.asarray(_get(record, 'n', '')))]
+    given = np.asarray(_get(record, 'fids', ''))
+    if given.ndim == 1:
+        given = given.reshape(-1, 1)
+    try:
+        water = [bool(v) for v in np.ravel(np.asarray(_get(record, 'water', '')))]
+    except RuntimeError:
+        water = [False] * len(names)
+    return names, lengths, given, water
 
 
 def _unpack_cell_string(val):

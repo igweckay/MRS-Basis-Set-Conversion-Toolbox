@@ -11,21 +11,22 @@ FSL-MRS .json structure (confirmed from your documentation):
             "basis_re"    : [real FID values],
             "basis_im"    : [imag FID values],
             "basis_dwell" : dwell time in seconds,
-            "basis_centre": centre frequency in ppm,
-            "basis_width" : null,
+            "basis_centre": the spectrometer frequency in MHz (FSL-MRS reads it as
+                            centralFrequency = basis_centre * 1E6),
+            "basis_width" : linewidth in Hz, or null,
             "basis_name"  : "metabolite name"
         },
         "meta": {
             "time"      : "YYYYMMDD_HHMMSS",
-            "SimVersion": "Converted by basis_set_converter"
+            "SimVersion": "Converted by basis_set_converter",
+            "EchoTime"  : echo time in seconds, as NIfTI-MRS states it, where the set states one
+                          (the basis has no field for it; FSL-MRS does not read meta)
         }
     }
 
 Note:
-    - basis_centre is the ppm reference (centerFreq or 4.65)
+    - basis_centre is sf in MHz; FSL-MRS stores no ppm reference (its nucleus' default)
     - basis_dwell = 1/sw in seconds
-    - sf (Larmor frequency) is NOT stored in FSL-MRS format
-    - Water-referenced: centre typically 4.65 ppm
 
 Entry points:
     write_fsLmrs_file(core, outpath)        → one .json file
@@ -36,6 +37,8 @@ import os
 import json
 import numpy as np
 from datetime import datetime
+
+from writers.centre import fid_at_centre
 
 
 def write_fsLmrs_file(core, outpath):
@@ -50,13 +53,16 @@ def write_fsLmrs_file(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid   = np.asarray(core['fid']).ravel().astype(complex)
+    fid   = fid_at_centre(core).astype(complex)   # FSL-MRS reads 1H at 4.65 ppm
     sw    = float(core['sw'])
     name  = str(core.get('name', 'unknown'))
     dwell = 1.0 / sw
 
-    centre = float(core.get('centerFreq') or
-                   core.get('ppmCalib')   or 4.65)
+    sf = core.get('sf')
+    if sf is None:
+        raise RuntimeError(f"{name}: FSL-MRS stores the spectrometer frequency (sf), which "
+                           "the basis does not have")
+    linewidth = core.get('linewidth')
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -65,8 +71,8 @@ def write_fsLmrs_file(core, outpath):
             "basis_re"    : fid.real.tolist(),
             "basis_im"    : fid.imag.tolist(),
             "basis_dwell" : dwell,
-            "basis_centre": centre,
-            "basis_width" : None,
+            "basis_centre": float(sf),
+            "basis_width" : None if linewidth is None else float(linewidth),
             "basis_name"  : name,
         },
         "meta": {
@@ -74,6 +80,8 @@ def write_fsLmrs_file(core, outpath):
             "SimVersion" : "Converted by basis_set_converter",
         }
     }
+    if core.get('te'):
+        data["meta"]["EchoTime"] = float(core['te']) / 1000.0
 
     with open(outpath, 'w') as f:
         json.dump(data, f, indent=4)
@@ -105,10 +113,13 @@ def write_fsLmrs_folder(basis_list, outdir):
             print(f"  Written: {name}.json")
         except Exception as ex:
             failed.append(name)
+            reason = ex
             print(f"  WARNING: failed for {name} — {ex}")
 
     if failed:
         print(f"\n  {len(failed)} failed: {', '.join(failed)}")
+    if failed and not written:
+        raise RuntimeError(f"Nothing written: every basis function failed, the last with: {reason}")
     print(f"\n  Done. {len(written)} FSL-MRS .json files written to: {outdir}")
     return written
 

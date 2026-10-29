@@ -25,6 +25,8 @@ import os
 import numpy as np
 import scipy.io as sio
 
+from writers.centre import fid_at_centre
+
 
 PROTON_GAMMA = 42.57747892e6   # Hz/T  (confirmed from make_profit_basis_set_kci.m)
 
@@ -59,7 +61,7 @@ def write_profit(basis_list, outpath):
 
     for k, core in enumerate(basis_list):
         name = str(core.get('name', f'Metab_{k+1:02d}'))
-        fid  = np.asarray(core['fid']).ravel().astype(complex)
+        fid  = fid_at_centre(core).astype(complex)   # ProFit states no ppm centre: read at 4.65
 
         # ProFit expects 1 x n row vector
         fid_cells[0, k] = fid.reshape(1, -1)

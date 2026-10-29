@@ -29,6 +29,8 @@ Core struct returned:
         'n'      : int, number of points
         'name'   : str, metabolite name
         'Bo'     : float, field strength in Tesla
+        'linewidth' : float or None, linewidth in Hz (as FID-A's)
+        'te'     : float or None, echo time in ms (FID-A's te, if the file holds one)
         'source' : str, path to source file
     }
 
@@ -60,6 +62,10 @@ def read_mrscloud_file(path, name=None):
     Bo    = float(np.asarray(_get(s, 'Bo', path)).squeeze())
     txfrq = float(np.asarray(_get(s, 'txfrq', path)).squeeze())
     sf    = txfrq / 1e6
+    lw    = _get_optional(s, 'linewidth', default=None)
+    lw    = None if lw is None else float(np.asarray(lw).squeeze())
+    te    = _get_optional(s, 'te', default=None)          # FID-A's, ms; MRSCloud's own files hold none
+    te    = None if te is None else (float(np.asarray(te).squeeze()) or None)
 
     # name field is present in MRSCloud (unlike FID-A)
     if name is None:
@@ -76,6 +82,9 @@ def read_mrscloud_file(path, name=None):
         'n'      : n,
         'name'   : name,
         'Bo'     : Bo,
+        'linewidth': lw,
+        'te'     : te,
+        'centerFreq': _centre(s),
         'source' : path,
     }
 
@@ -174,3 +183,14 @@ def _get_optional(struct, field, default=None):
         return _get(struct, field, '')
     except RuntimeError:
         return default
+
+
+def _centre(struct):
+    """The ppm at 0 Hz of the ppm axis the file stores, or None: FID-A's frequency grid is
+    symmetric about 0 Hz, so it is the axis' midpoint (4.65 in FID-A's own files, 2.97 in
+    MRSCloud's, whose basis sets are centred near 3.0 ppm as Osprey's are)."""
+    ppm = _get_optional(struct, 'ppm', default=None)
+    ppm = None if ppm is None else np.asarray(ppm, dtype=float).ravel()
+    if ppm is None or ppm.size < 2:
+        return None
+    return round(float(ppm[0] + ppm[-1]) / 2, 4)

@@ -91,6 +91,8 @@ def read_lcmodel_basis(path):
     deltat  = float(seqpar.get('DELTAT', 0)) or float(seqpar.get('BADELT', 0))
     echot   = float(seqpar.get('ECHOT',  0)) or None
     seq     = seqpar.get('SEQ', '').strip("'\" ")
+    # FWHMBA is the basis' linewidth in ppm (-1 where unknown); kept as stated, and in Hz
+    fwhmba  = float(seqpar['FWHMBA']) if seqpar.get('FWHMBA') else None
 
     ############## Parse $BASIS1 block #############
     basis1  = _parse_namelist(text, 'BASIS1')
@@ -150,6 +152,8 @@ def read_lcmodel_basis(path):
             'name'   : metabo,
             'te'     : echot,
             'seq'    : seq if seq else None,
+            'linewidth': fwhmba * hzpppm if fwhmba and fwhmba > 0 else None,
+            'fwhmba' : fwhmba,
             'source' : path,
         })
         _log(f"  Loaded: {metabo}")
@@ -192,8 +196,7 @@ def read_lcmodel_raw(path, name=None, sw=None, sf=None):
     hzpppm  = float(seqpar.get('HZPPPM', 0))
     nunfil  = int(float(seqpar.get('NUNFIL', 0)))
     deltat  = float(seqpar.get('DELTAT', 0))
-
-    sw = round(1.0 / deltat) if deltat > 0 else 0.0
+    echot   = float(seqpar['ECHOT']) if seqpar.get('ECHOT') else None
 
     ############## Find FID data after last $END #############
     last_end = text.upper().rfind('$END')
@@ -227,7 +230,7 @@ def read_lcmodel_raw(path, name=None, sw=None, sf=None):
         'sf'           : sf_out,
         'n'            : len(fid),
         'name'         : name,
-        'te'           : None,
+        'te'           : echot,
         'seq'          : None,
         'is_marss_raw' : is_marss_raw,
         'source'       : path,

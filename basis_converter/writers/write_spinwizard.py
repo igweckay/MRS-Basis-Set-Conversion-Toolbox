@@ -20,6 +20,8 @@ Entry point:
 import os
 import numpy as np
 
+from writers.centre import CENTRE, fid_at_centre
+
 
 def write_spinwizard(basis_list, outdir):
     """
@@ -42,7 +44,7 @@ def write_spinwizard(basis_list, outdir):
 
     for core in basis_list:
         name = core.get('name', 'unknown')
-        fid  = np.asarray(core['fid']).ravel()
+        fid  = fid_at_centre(core)   # at 4.65, the centre BasisRFOffset states
 
         # Output path — no extension, just the metabolite name
         outpath = os.path.join(outdir, name)
@@ -53,7 +55,7 @@ def write_spinwizard(basis_list, outdir):
         # Write — tab separated, matching SpinWizard style
         with open(outpath, 'w') as f:
             for row in data:
-                f.write(f"  {row[0]:20.10e}\t\t  {row[1]:20.10e}\n")
+                f.write(f"  {row[0]:24.16e}\t\t  {row[1]:24.16e}\n")   # double precision
 
         written.append(outpath)
         names.append(name)
@@ -80,7 +82,9 @@ def write_spinwizard(basis_list, outdir):
         print(f"  Written: BasisSetParameters.txt  (sf={sf:.2f} MHz, sw={sw:.3f} kHz)")
 
     # Write BasisRFOffset.txt — ppmCalib
-    ppm_calib = basis_list[0].get('ppmCalib') or 4.65
+    # (4.65, where the functions are written: fid_at_centre; a ppmCalib read is a label, MARSS's
+    # 4.675 sets are at 4.65)
+    ppm_calib = CENTRE
     offset_path = os.path.join(outdir, 'BasisRFOffset.txt')
     with open(offset_path, 'w') as f:
         f.write(f"  {ppm_calib:.4f}\n")

@@ -25,8 +25,6 @@ nibabel>=3.2.0         # NIfTI file reading/writing
 # These are command-line tools installed via pip, not imported directly
 spec2nii>=0.6.0        # converts .raw → .nii.gz
 # pip install spec2nii
-# fsl_mrs is also required for fsl_mrs_proc (conjugation step)
-# Install FSL-MRS separately: https://open.win.ox.ac.uk/pages/fsl/fsl_mrs/
 
 ######################### GUI (tkinter) ###########################
 # tkinter is part of the Python standard library — NOT pip installable

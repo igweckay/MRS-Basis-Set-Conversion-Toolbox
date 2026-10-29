@@ -136,15 +136,15 @@ def read_spinwizard_folder(folder_path, sw=None, sf=None, ppm_calib=None):
     Read all SpinWizard basis files in a folder.
 
     Automatically reads BasisSetParameters.txt and BasisRFOffset.txt
-    if present. Any sw/sf/ppm_calib passed as arguments override
-    the values from the companion files.
+    if present. The sw/sf/ppm_calib passed as arguments are used where
+    the companion files state none, as core.load passes them.
 
     Parameters
     ----------
     folder_path : str
-    sw          : float or None — spectral width in Hz (overrides file)
-    sf          : float or None — Larmor frequency in MHz (overrides file)
-    ppm_calib   : float or None — water reference ppm (overrides file)
+    sw          : float or None — spectral width in Hz (where the files state none)
+    sf          : float or None — Larmor frequency in MHz (where the files state none)
+    ppm_calib   : float or None — water reference ppm (where the files state none)
 
     Returns
     -------
@@ -154,9 +154,9 @@ def read_spinwizard_folder(folder_path, sw=None, sf=None, ppm_calib=None):
 
     # Read companion parameter files
     companion = _read_companion_files(folder_path)
-    sw        = sw        or companion['sw']
-    sf        = sf        or companion['sf']
-    ppm_calib = ppm_calib or companion['ppmCalib']
+    sw        = companion['sw']       or sw
+    sf        = companion['sf']       or sf
+    ppm_calib = companion['ppmCalib'] or ppm_calib
 
     # Collect candidate files — no extension, not hidden, not system files
     candidates = []

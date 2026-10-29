@@ -5,15 +5,21 @@ Basis Set Converter — NIfTI-MRS writer
 Converts a list of core struct dicts (one per metabolite) to NIfTI-MRS
 format (.nii.gz) using the confirmed pipeline:
 
-    core struct -> .raw (via write_lcmodel_raw) -> spec2nii -> .nii.gz -> fsl_mrs_proc conj -> _conj.nii.gz
+    core struct -> .raw (via write_lcmodel_raw) -> spec2nii -> .nii.gz -> conjugated
+
+NIfTI-MRS FIDs are the complex conjugate of a basis' own (FSL-MRS reads NAA at 2.01 ppm
+only then), as the conj step of step_2_batch_convert_raw_to_nifti.sh made them; the
+conjugation and the echo time, which spec2nii's raw route does not store, are applied to
+spec2nii's file in place. (fsl_mrs_proc conj --output takes a folder: it wrote its file
+into a folder named <name>_conj.nii.gz, or failed, and the unconjugated file was used.)
 
 Pipeline confirmed from:
     step_1_mat_to_raw.py    — MARSS .mat -> .raw
-    step_2_batch_convert_raw_to_nifti.sh — .raw -> .nii.gz -> _conj.nii.gz
+    step_2_batch_convert_raw_to_nifti.sh — .raw -> .nii.gz -> conjugated
 
 Requirements:
     spec2nii    — pip install spec2nii
-    fsl_mrs     — FSL-MRS installation
+    nibabel     — pip install nibabel
 
 spec2nii parameters (hardcoded for now, made dynamic in screen 2):
     -n 1H           nucleus
@@ -23,7 +29,7 @@ spec2nii parameters (hardcoded for now, made dynamic in screen 2):
     -f {name}       output filename stem
 
 Entry point:
-    write_niftimrs(basis_list, outdir) -> list of output .nii.gz paths
+    write_niftimrs(basis_list, outdir, te=None) -> list of output .nii.gz paths
 """
 
 import os
@@ -31,8 +37,10 @@ import subprocess
 import tempfile
 import numpy as np
 
+from writers.centre import fid_at_centre
 
-def write_niftimrs(basis_list, outdir):
+
+def write_niftimrs(basis_list, outdir, te=None):
     """
     Convert a list of core struct dicts to NIfTI-MRS .nii.gz files.
 
@@ -42,10 +50,12 @@ def write_niftimrs(basis_list, outdir):
         Each dict is a core struct with keys: fid, sw, sf, n, name, source
     outdir : str
         Output directory for .nii.gz files.
+    te : float or None
+        Echo time in ms, for basis functions that state none.
 
     Returns
     -------
-    list of str — paths to output _conj.nii.gz files
+    list of str — paths to output .nii.gz files
     """
     os.makedirs(outdir, exist_ok=True)
 
@@ -64,18 +74,21 @@ def write_niftimrs(basis_list, outdir):
                 ############### Step 2: spec2nii raw -> .nii.gz ##############
                 nii_path = _run_spec2nii(raw_path, name, outdir, core)
 
-                ############### Step 3: fsl_mrs_proc conj -> _conj.nii.gz ##############
-                conj_path = _run_conj(nii_path, outdir, name)
+                ############### Step 3: conjugate, add the echo time and the linewidth ##############
+                _finish(nii_path, core.get('te') or te, core.get('linewidth'))
 
-                output_paths.append(conj_path)
-                print(f"  Written: {os.path.basename(conj_path)}")
+                output_paths.append(nii_path)
+                print(f"  Written: {os.path.basename(nii_path)}")
 
             except Exception as ex:
                 failed.append(name)
+                reason = ex
                 print(f"  WARNING: failed for {name} — {ex}")
 
         if failed:
             print(f"\n  {len(failed)} metabolite(s) failed: {', '.join(failed)}")
+        if failed and not output_paths:
+            raise RuntimeError(f"Nothing written: every basis function failed, the last with: {reason}")
 
         print(f"\n  Done. {len(output_paths)} NIfTI-MRS files written to: {outdir}")
         return output_paths
@@ -92,7 +105,7 @@ def _write_raw(core, raw_path):
         - NUNFIL = n
         - DELTAT = 1/sw
     """
-    fid   = np.asarray(core['fid']).ravel()
+    fid   = fid_at_centre(core)    # NIfTI-MRS states no ppm centre: read at 4.65
     sf    = float(core['sf'])      # MHz — already correct
     sw    = float(core['sw'])      # Hz
     dwell = 1.0 / sw
@@ -110,14 +123,14 @@ def _write_raw(core, raw_path):
         f.write(" $END\n")
         f.write(" $NMID\n")
         f.write(f" ID='{core['name']}'\n")
-        f.write(" FMTDAT='(8E13.5)'\n")
+        f.write(" FMTDAT='(4E25.16)'\n")
         f.write(" VOLUME=   1.00000E+00\n")
         f.write(" TRAMP=    1.00000E+00\n")
         f.write(" $END\n")
 
-        for i in range(0, len(vals), 8):
-            chunk = vals[i:i + 8]
-            f.write(" ".join(f"{v:+.5E}" for v in chunk) + "\n")
+        for i in range(0, len(vals), 4):
+            chunk = vals[i:i + 4]
+            f.write("".join(f"{v:25.16E}" for v in chunk) + "\n")
 
 
 ############### Step 2: spec2nii ##############
@@ -165,64 +178,40 @@ def _run_spec2nii(raw_path, name, outdir, core):
     return nii_path
 
 
-############### Step 3: fsl_mrs_proc conj ##############
+############### Step 3: conjugate ##############
 
-def _run_conj(nii_path, outdir, name):
+def _finish(nii_path, te=None, linewidth=None):
     """
-    Run fsl_mrs_proc conj to conjugate the NIfTI-MRS file.
-    Matches step_2_batch_convert_raw_to_nifti.sh convention.
-
-    fsl_mrs_proc conj --file {input} --output {output_path}
-    Output filename: {name}_conj.nii.gz
+    Conjugate the FIDs of spec2nii's file, as NIfTI-MRS holds them, and store the echo
+    time (ms) as EchoTime (s) in its header extension, and the linewidth (Hz) as BasisLinewidth,
+    a user-defined key (the standard defines none for it).
     """
-    conj_path = os.path.join(outdir, f"{name}_conj.nii.gz")
+    import json
+    import nibabel as nib
 
-    cmd = [
-        'fsl_mrs_proc', 'conj',
-        '--file',   nii_path,
-        '--output', conj_path,
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"fsl_mrs_proc conj failed for {name}:\n{result.stderr}"
-        )
-
-    # fsl_mrs_proc may write to outdir with a different naming convention
-    # Check for the expected file and common alternatives
-    candidates = [
-        conj_path,
-        os.path.join(outdir, f"{name}_conj.nii.gz"),
-        os.path.join(outdir, f"{name}.nii.gz"),  # some versions overwrite
-    ]
-    # Also search outdir for any new .nii.gz with name in it
-    for f in os.listdir(outdir):
-        full = os.path.join(outdir, f)
-        if name in f and f.endswith('.nii.gz') and full not in candidates:
-            candidates.append(full)
-
-    for candidate in candidates:
-        if os.path.isfile(candidate):
-            return candidate
-
-    raise RuntimeError(
-        f"fsl_mrs_proc ran but output not found. "
-        f"Expected: {conj_path}. "
-        f"Files in outdir: {os.listdir(outdir)}"
-    )
+    img  = nib.load(nii_path)
+    ext  = next(e for e in img.header.extensions if e.get_code() == 44)
+    meta = json.loads(ext.get_content())
+    if te:
+        meta['EchoTime'] = float(te) / 1000.0
+    if linewidth is not None:                  # a user-defined key, as the standard defines one
+        meta['BasisLinewidth'] = {'Value': float(linewidth),
+                                  'Description': 'Linewidth of the basis functions, Hz'}
+    out  = type(img)(np.conj(np.asarray(img.dataobj)), img.affine, header=img.header)
+    out.header.extensions.remove(next(e for e in out.header.extensions if e.get_code() == 44))
+    out.header.extensions.append(nib.nifti1.Nifti1Extension(44, json.dumps(meta).encode()))
+    nib.save(out, nii_path)
 
 
 ############### Dependency check ##############
 
 def check_dependencies():
     """
-    Check that spec2nii and fsl_mrs_proc are available.
+    Check that spec2nii is available.
     Returns list of missing tools.
     """
     missing = []
-    for tool in ['spec2nii', 'fsl_mrs_proc']:
+    for tool in ['spec2nii']:
         result = subprocess.run(
             ['which', tool],
             capture_output=True, text=True
@@ -257,7 +246,6 @@ if __name__ == '__main__':
     if missing:
         print(f"Missing tools: {', '.join(missing)}")
         print("Install with:  pip install spec2nii")
-        print("               pip install fsl-mrs")
         sys.exit(1)
 
     # Load basis functions

@@ -29,6 +29,8 @@ import os
 import numpy as np
 from datetime import datetime
 
+from writers.centre import at_centre
+
 
 def write_gava(basis_list, outpath,
                seqte=26.0,
@@ -43,6 +45,7 @@ def write_gava(basis_list, outpath,
     seqte          : float, echo time in ms
     metablist_path : str or None, path to metabList.mat
     """
+    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 
@@ -80,7 +83,7 @@ def write_gava(basis_list, outpath,
         fid       = np.asarray(core['fid']).ravel()
         sf        = float(core.get('sf') or 123.26)
         sw        = float(core.get('sw') or 4000.0)
-        ppm_calib = float(core.get('ppmCalib') or PPM_CALIB)
+        ppm_calib = PPM_CALIB                    # (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
 
         lit_lines = _get_lit_ppms(name, ppm_table)
         peaks     = _peaks_at_ppms(fid, sf, sw, lit_lines, ppm_calib=ppm_calib)

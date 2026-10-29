@@ -19,6 +19,8 @@ import os
 import numpy as np
 from datetime import datetime
 
+from writers.centre import at_centre
+
 
 ############## Linewidth defaults (Hz) #############
 LW_INIT = {
@@ -76,6 +78,7 @@ def write_oxsa(basis_list, outpath,
     seqte          : float, echo time in ms
     metablist_path : str or None, path to metabList.mat
     """
+    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 
@@ -83,7 +86,7 @@ def write_oxsa(basis_list, outpath,
         raise RuntimeError("basis_list is empty")
 
     # Get metabolite names and dominant PPM positions
-    from writers.write_vespa import (_load_metablist, _get_lit_ppms,
+    from writers.write_vespa import (_load_metablist, _get_lit_ppms, _peaks_at_ppms,
                                      METAB_PPM_TABLE, PPM_CALIB as VC)
 
     ppm_table = _load_metablist(metablist_path) if metablist_path \
@@ -94,11 +97,11 @@ def write_oxsa(basis_list, outpath,
     for core in basis_list:
         name      = core.get('name', 'unknown')
         lit_lines = _get_lit_ppms(name, ppm_table)
-        # Get dominant PPM — first lit ppm or fallback
-        if lit_lines:
-            dom_ppm = lit_lines[0][0]
-        else:
-            dom_ppm = 2.0
+        # Dominant PPM: the literature line where the basis is strongest, or a fallback
+        peaks = _peaks_at_ppms(np.asarray(core['fid']).ravel(), float(core.get('sf') or 123.26),
+                               float(core.get('sw') or 4000.0), lit_lines,
+                               ppm_calib=VC) if lit_lines else []
+        dom_ppm = max(peaks, key=lambda p: p[1])[0] if peaks else _strongest_ppm(core, VC)
 
         lw_init   = LW_INIT.get(name, DEFAULT_LW_INIT)
         lw_bounds = LW_BOUNDS.get(name, DEFAULT_LW_BOUNDS)
@@ -118,7 +121,7 @@ def write_oxsa(basis_list, outpath,
     first     = basis_list[0]
     sf        = float(first.get('sf') or 123.26)
     sw        = float(first.get('sw') or 4000.0)
-    ppm_calib = float(first.get('ppmCalib') or VC)
+    ppm_calib = VC                               # (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
     source    = first.get('source', 'unknown')
     timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
@@ -359,3 +362,13 @@ if __name__ == '__main__':
                  else [read_marss_file(input_path)]
     print(f"Loaded {len(basis_list)} metabolites\n")
     write_oxsa(basis_list, outpath, seqte=seqte, metablist_path=metablist_path)
+
+
+def _strongest_ppm(core, default_calib):
+    """Where a basis function without literature lines is strongest, between 0.5 and 4.3 ppm."""
+    fid = np.asarray(core['fid']).ravel()
+    sf, sw = float(core.get('sf') or 123.26), float(core.get('sw') or 4000.0)
+    ppm = float(default_calib) + np.fft.fftshift(np.fft.fftfreq(len(fid), 1.0 / sw)) / sf
+    spec = np.abs(np.fft.fftshift(np.fft.fft(fid)))
+    window = (ppm > 0.5) & (ppm < 4.3)
+    return float(ppm[window][np.argmax(spec[window])])

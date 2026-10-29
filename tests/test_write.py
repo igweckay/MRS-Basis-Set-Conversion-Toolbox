@@ -1,0 +1,655 @@
+"""
+tests/test_write.py
+Converting a basis set without the GUI: core.write and core.load.fill_missing, as
+screen4_convert runs them.
+
+Run from the repository root: python -m pytest tests
+"""
+
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SAMPLES = os.path.join(ROOT, 'sample_basis_sets')
+sys.path.insert(0, os.path.join(ROOT, 'basis_converter'))
+
+from core.detect import detect_format                   # noqa: E402
+from core.load import fill_missing, load_basis          # noqa: E402
+from core.write import write_basis                      # noqa: E402
+
+
+def _jmrui():
+    return load_basis([os.path.join(SAMPLES, 'JMRUI', name)
+                       for name in ('NAA.txt', 'Cr391.txt')], 'jMRUI .txt')
+
+
+def test_a_basis_is_written_for_the_tool_chosen_without_the_gui(tmp_path):
+    written = write_basis(_jmrui(), 'fsLmrs', 'default', str(tmp_path))
+
+    assert sorted(os.path.basename(p) for p in written) == ['Cr391.json', 'NAA.json']
+    assert detect_format(written)['format'] == 'FSL-MRS .json'
+    assert 'tkinter' not in sys.modules
+
+
+def test_parameters_the_files_lack_are_filled_in_and_kept_where_stated(tmp_path):
+    files = [os.path.join(SAMPLES, 'FSL-MRS', name) for name in ('NAA.json', 'Cr391.json')]
+    basis = load_basis(files, detect_format(files)['format'])
+    sw = basis[0]['sw']
+
+    fill_missing(basis, {'sf': 123.2, 'sw': 1.0, 'te': 30})            # sf, sw stated: kept
+    written = write_basis(basis, 'lcmodel', 'basis', str(tmp_path))
+
+    assert [b['sf'] for b in basis] == [123.261803, 123.261803] and basis[0]['sw'] == sw
+    assert [b['te'] for b in basis] == [30, 30]
+    assert detect_format(written)['data']['sf'] == 123.261803
+
+
+def test_raw_files_without_their_parameters_take_those_given(tmp_path):
+    folder = os.path.join(SAMPLES, 'LCModel', 'raw_files')
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.raw'))
+    basis = load_basis(files, detect_format(files)['format'], sw=4000.0, sf=123.2)
+
+    written = write_basis(basis, 'lcmodel', 'basis', str(tmp_path))
+
+    assert detect_format(written)['data']['sw'] == 4000
+
+
+def test_fsl_mrs_fields_are_the_frequency_and_the_linewidth(tmp_path):
+    """FSL-MRS's fsl_io reads basis_centre as the spectrometer frequency in MHz and
+    basis_width as the linewidth; the ppm reference is its nucleus' default, not stored."""
+    import json
+    from readers.read_fsLmrs import read_fsLmrs_file
+    from writers.write_fsLmrs import write_fsLmrs_file
+
+    asc = read_fsLmrs_file(os.path.join(SAMPLES, 'FSL-MRS', 'Asc.json'))
+    assert asc['sf'] == 123.261803 and asc['centerFreq'] is None and asc['linewidth'] is None
+
+    out = str(tmp_path / 'Asc.json')
+    write_fsLmrs_file(dict(asc, linewidth=2.5, centerFreq=3.0), out)
+    written = json.load(open(out))['basis']
+    assert written['basis_centre'] == 123.261803 and written['basis_width'] == 2.5
+
+
+def test_mrscloud_files_are_read_as_mrscloud_saves_them():
+    """MRSCloud saves each metabolite as the one struct outA, not as top-level fields."""
+    folder = os.path.join(SAMPLES, 'MRSCLOUD')
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder)
+                   if f.startswith('Siemens_') and f.endswith('.mat'))
+    found = detect_format(files)
+    basis = load_basis(files, found['format'])
+
+    assert found['format'] == 'MRSCloud .mat' and detect_format(files[:1])['format'] == 'MRSCloud .mat'
+    assert len(basis) == len(files) == 25
+    assert (basis[0]['name'], basis[0]['sw'], basis[0]['sf']) == ('Ace', 4000.0, 123.04753)
+
+
+def test_a_basis_stating_no_linewidth_is_written_with_the_default(tmp_path):
+    """FSL-MRS states the linewidth as null when it has none; every writer takes its default."""
+    files = [os.path.join(SAMPLES, 'FSL-MRS', name) for name in ('NAA.json', 'Cr391.json')]
+    basis = load_basis(files, detect_format(files)['format'])
+    assert [b['linewidth'] for b in basis] == [None, None]
+
+    for tool in ('inspector', 'fida', 'mrscloud'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        written = write_basis(basis, tool, 'default', str(outdir))
+        found = detect_format(written)
+
+        assert found['status'] == 'full', tool
+        assert len(load_basis(written, found['format'])) == 2, tool
+
+
+def test_every_format_read_at_4_65_ppm_keeps_a_stated_centre(tmp_path):
+    """FSL-MRS, jMRUI, FID-A and MRSCloud state no ppm centre and are read at 4.65, as LCModel is:
+    a basis put at 3.0 ppm (Osprey's own sets) is shifted, so NAA stays at 2.01 ppm."""
+    import numpy as np
+    naa = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')[0]
+    t = np.arange(len(naa['fid'])) / naa['sw']
+    moved = dict(naa, fid=naa['fid'] * np.exp(2j * np.pi * 1.65 * naa['sf'] * t), centerFreq=3.0)
+
+    for tool in ('fsLmrs', 'jmrui', 'fida', 'mrscloud', 'lcmodel'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        written = write_basis([moved], tool, 'raw' if tool == 'lcmodel' else 'default', str(outdir))
+        back = load_basis(written, detect_format(written)['format'], sw=naa['sw'], sf=naa['sf'])[0]
+
+        assert np.allclose(back['fid'], naa['fid'], atol=1e-4 * np.abs(naa['fid']).max()), tool
+
+
+def test_osprey_creatines_hold_both_their_parts(tmp_path):
+    """MARSS splits Cr and PCr into the 3.9 ppm CH2 and the rest; Osprey's own Cr and PCr hold
+    both, and its CrCH2 is a negative CH2 correction, so the parts are summed into Cr and PCr."""
+    import numpy as np
+    parts = ('Cr391', 'CrNo391', 'PCr393', 'PCrNo393', 'NAA')
+    basis = load_basis([os.path.join(SAMPLES, 'JMRUI', f'{p}.txt') for p in parts], 'jMRUI .txt')
+    fid = {b['name']: b['fid'] for b in basis}
+
+    names, fids, _, _ = _osprey(basis, tmp_path)                    # as Osprey reads the .mat
+    back = dict(zip(names, fids.T))
+
+    assert 'CrCH2' not in back
+    for name, summed in (('Cr', fid['Cr391'] + fid['CrNo391']), ('PCr', fid['PCr393'] + fid['PCrNo393'])):
+        # from the second point: Osprey's DC correction (op_dccorr) takes a constant off the spectrum
+        got, summed = back[name][1:len(summed)], summed[1:]
+        scale = np.vdot(summed, got) / np.vdot(summed, summed)       # Osprey normalises the set
+        assert np.linalg.norm(got - scale * summed) < 1e-6 * np.linalg.norm(got), name
+
+
+def test_osprey_states_the_centre_a_basis_stating_none_is_at(tmp_path):
+    """A basis read from a format with no ppm centre is at 4.65 ppm (writers/centre.py); Osprey
+    reads its peaks against the centerFreq it states."""
+    basis = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')
+    written = write_basis(basis, 'osprey', 'mat', str(tmp_path))
+
+    assert load_basis(written, detect_format(written)['format'])[0]['centerFreq'] == 4.65
+
+
+def test_nifti_mrs_keeps_a_stated_centre(tmp_path):
+    """NIfTI-MRS states no ppm centre either (FSL-MRS reads 1H at 4.65); its .raw step, before
+    spec2nii, shifts a basis put at 3.0 ppm as the other writers do."""
+    import numpy as np
+    from readers.read_lcmodel import read_lcmodel_raw
+    from writers.write_niftimrs import _write_raw
+    naa = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')[0]
+    t = np.arange(len(naa['fid'])) / naa['sw']
+    moved = dict(naa, fid=naa['fid'] * np.exp(2j * np.pi * 1.65 * naa['sf'] * t), centerFreq=3.0)
+
+    _write_raw(moved, str(tmp_path / 'NAA.raw'))
+    back = read_lcmodel_raw(str(tmp_path / 'NAA.raw'), sw=naa['sw'], sf=naa['sf'])
+
+    assert np.allclose(back['fid'], naa['fid'], atol=1e-4 * np.abs(naa['fid']).max())
+
+
+def test_mrscloud_converted_to_basis_is_mrscloud_own_basis(tmp_path):
+    """MRSCloud's basis sets are centred near 3.0 ppm, as the ppm axis each file stores says
+    (2.97 here); converted to .BASIS they are MRSCloud's own .BASIS export of the same set,
+    up to one scale for the set and the 5 digits a .BASIS keeps."""
+    import re
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'MRSCLOUD')
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder)
+                   if f.startswith('Siemens_') and f.endswith('.mat'))
+    written = write_basis(load_basis(files, 'MRSCloud .mat'), 'lcmodel', 'basis', str(tmp_path))
+
+    def spectra(path):
+        out = {}
+        for block in re.split(r'\$BASIS(?![0-9])', open(path).read())[1:]:
+            name = re.search(r"METABO\s*=\s*'([^']*)'", block).group(1).strip()
+            body = re.split(r'(?m)^\s*\$END\s*$', block, maxsplit=1)[1].split('$')[0]
+            v = np.array(body.split(), dtype=float)
+            out[name] = v[0::2] + 1j * v[1::2]
+        return out
+
+    own = spectra(os.path.join(SAMPLES, 'LCModel', 'BASIS_file', 'LCModel_Siemens_UnEdited_sLASER_105_.BASIS'))
+    ours = spectra(written[0])
+    scales = []
+    for name, spec in own.items():
+        a = np.fft.ifft(spec)                              # MRSCloud's is not zero-filled
+        b = np.fft.ifft(ours[name])[:len(a)]
+        k = np.vdot(a, b) / np.vdot(a, a)
+        scales.append(k)
+        assert np.linalg.norm(b - k * a) < 1e-4 * np.linalg.norm(b), name
+    assert np.allclose(scales, scales[0], rtol=1e-4)
+
+
+def test_spant_and_abfit_get_the_format_asked_for(tmp_path):
+    """spant and ABfit read a .BASIS (BasiC's recommended output for them) and .raw files."""
+    basis = _jmrui()
+    for tool in ('spant', 'abfit'):
+        for out_fmt, wanted in (('basis', ['basis_set.BASIS']), ('raw', ['Cr391.raw', 'NAA.raw'])):
+            outdir = tmp_path / tool / out_fmt
+            written = write_basis(basis, tool, out_fmt, str(outdir))
+
+            assert sorted(os.path.basename(p) for p in written) == wanted, (tool, out_fmt)
+
+
+def test_osprey_names_are_a_cell_of_strings(tmp_path):
+    """Osprey finds its metabolites by strcmp on BASIS.name, a cell of strings in its own sets;
+    a char matrix pads the shorter names with blanks, 'NAA  ', which no strcmp finds."""
+    import numpy as np
+    import scipy.io as sio
+    written = write_basis(_jmrui(), 'osprey', 'mat', str(tmp_path))
+    names = sio.loadmat(written[0])['BASIS']['name'][0, 0]
+
+    assert names.dtype == object
+    assert {'NAA', 'Cr'} <= {str(np.ravel(n)[0]) for n in names.ravel()}
+
+
+def test_vespa_priors_are_read_back(tmp_path):
+    """core.detect names a VeSPA .xml, and readers/read_vespa reads it; load_basis takes it too."""
+    basis = _jmrui()
+    written = write_basis(basis, 'vespa_analysis', 'default', str(tmp_path))
+    found = detect_format(written)
+
+    assert found['format'] == 'VeSPA .xml'
+    assert sorted(b['name'] for b in load_basis(written, found['format'])) == ['Cr391', 'NAA']
+
+
+def _oxsa_ppm(path):
+    """Each OXSA component's expected ppm, by metabolite."""
+    import re
+    blocks = open(path).read().split('c = struct();')[1:]
+    return {re.search(r"c\.metab\s*=\s*'([^']+)'", b).group(1):
+            float(re.search(r'c\.ppmExpected\s*=\s*([-0-9.eE+]+)', b).group(1)) for b in blocks}
+
+
+def test_prior_writers_keep_a_stated_centre(tmp_path):
+    """The priors read peaks off the spectrum at 4.65 ppm: a basis put at 3.0 ppm (Osprey's and
+    MRSCloud's sets) is shifted first, so NAA is listed at 2.01 ppm."""
+    import numpy as np
+    naa = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')[0]
+    t = np.arange(len(naa['fid'])) / naa['sw']
+    moved = dict(naa, fid=naa['fid'] * np.exp(2j * np.pi * 1.65 * naa['sf'] * t), centerFreq=3.0)
+
+    for tool in ('pyamares', 'oxsa'):
+        (tmp_path / tool).mkdir()
+        for core, label in ((naa, 'stated none'), (moved, 'at 3.0')):
+            path = write_basis([core], tool, 'default', str(tmp_path / tool))[0]
+            if tool == 'pyamares':
+                rows = {r.split(',')[0]: r.split(',')[1:] for r in open(path).read().splitlines()[:6]}
+                ppm = float(rows['chemicalshift'][0])
+            else:
+                ppm = _oxsa_ppm(path)['NAA']
+            assert abs(ppm - 2.008) < 0.01, (tool, label, ppm)
+
+
+def test_oxsa_lists_each_metabolite_where_it_is_strongest(tmp_path):
+    """OXSA gets one component per metabolite: lactate's is its 1.31 ppm doublet, not the quartet."""
+    lac = load_basis([os.path.join(SAMPLES, 'JMRUI', 'Lac.txt')], 'jMRUI .txt')
+    path = write_basis(lac, 'oxsa', 'default', str(tmp_path))[0]
+
+    assert abs(_oxsa_ppm(path)['Lac'] - 1.31) < 0.03
+
+
+def test_raw_files_keep_the_echo_time(tmp_path):
+    """LCModel's .raw states the echo time in $SEQPAR (ECHOT); it is written and read back."""
+    written = write_basis(_jmrui(), 'lcmodel', 'raw', str(tmp_path), te=26.0)
+
+    assert [b['te'] for b in load_basis(written, detect_format(written)['format'])] == [26.0, 26.0]
+
+
+def test_spinwizard_files_keep_the_frequency_they_state(tmp_path):
+    """A frequency passed to load_basis is for files that state none; SpinWizard's state theirs."""
+    folder = os.path.join(SAMPLES, 'SPINWIZARD')
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder) if '.' not in f)
+    basis = load_basis(files, 'SpinWizard', sw=2000.0, sf=63.9)
+
+    assert {(b['sw'], b['sf']) for b in basis} == {(4000.0, 123.2618)}
+
+
+def test_a_basis_keeps_the_linewidth_lcmodel_reads_in_ppm(tmp_path):
+    """LCModel's FWHMBA is the basis' linewidth in ppm, a basis' linewidth is in Hz (FSL-MRS's
+    basis_width, FID-A's linewidth); a .BASIS read and written again states the FWHMBA it did."""
+    from readers.read_lcmodel import read_lcmodel_basis
+    from writers.write_lcmodel import write_lcmodel_basis
+    cows = os.path.join(SAMPLES, 'LCModel', 'BASIS_file', 'SLASER_Siemens26.basis')
+    basis = read_lcmodel_basis(cows)                           # FWHMBA= 9.99999978E-03
+    sf = basis[0]['sf']
+    assert abs(basis[0]['linewidth'] - 0.01 * sf) < 1e-6
+
+    def fwhmba(path):
+        return float(next(l for l in open(path) if 'FWHMBA' in l).split('=')[1].strip(' ,\n'))
+
+    write_lcmodel_basis([dict(b, linewidth=2.0) for b in basis], str(tmp_path / 'hz.BASIS'))
+    write_lcmodel_basis([dict(b, linewidth=None, fwhmba=-1.0) for b in basis], str(tmp_path / 'stated.BASIS'))
+    assert abs(fwhmba(tmp_path / 'hz.BASIS') - 2.0 / sf) < 1e-9
+    assert fwhmba(tmp_path / 'stated.BASIS') == -1.0
+
+
+def test_formats_without_a_centre_field_keep_a_stated_centre(tmp_path):
+    """INSPECTOR, ProFit, MARSS and SpinWizard store no ppm centre either and are read at 4.65:
+    a basis put at 3.0 ppm is shifted as for the others, so NAA stays at 2.01 ppm."""
+    import numpy as np
+    basis = _jmrui()
+    t = np.arange(len(basis[0]['fid'])) / basis[0]['sw']
+    moved = [dict(b, fid=b['fid'] * np.exp(2j * np.pi * 1.65 * b['sf'] * t), centerFreq=3.0) for b in basis]
+
+    for tool in ('inspector', 'profit', 'marss', 'spinwizard'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        written = write_basis(moved, tool, 'default', str(outdir))
+        back = load_basis(written, detect_format(written)['format'], sw=basis[0]['sw'], sf=basis[0]['sf'])
+
+        for b, c in zip(basis, sorted(back, key=lambda c: [x['name'] for x in basis].index(c['name']))):
+            assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max()), (tool, b['name'])
+
+
+def test_nifti_mrs_keeps_the_echo_time(tmp_path):
+    """NIfTI-MRS states the echo time (EchoTime, in s); spec2nii's raw route leaves it out, the
+    writer adds it, and it is read back in ms."""
+    written = write_basis(_jmrui(), 'niftimrs', 'default', str(tmp_path), te=26.0)
+
+    assert [b['te'] for b in load_basis(written, detect_format(written)['format'])] == [26.0, 26.0]
+
+
+def test_mrscloud_and_osprey_keep_the_linewidth(tmp_path):
+    """MRSCloud's outA.linewidth and Osprey's BASIS.linewidth (Hz) are written and read back."""
+    basis = [dict(b, linewidth=2.5) for b in _jmrui()]
+    for tool in ('mrscloud', 'osprey'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        written = write_basis(basis, tool, 'default', str(outdir), te=26.0)
+        back = load_basis(written, detect_format(written)['format'])
+
+        assert {b['linewidth'] for b in back if b['name'] in ('NAA', 'Cr391', 'Cr')} == {2.5}, tool
+
+
+def test_nifti_mrs_holds_the_fids_as_fsl_mrs_reads_them(tmp_path):
+    """NIfTI-MRS FIDs are the conjugate of a basis' own (FSL-MRS reads NAA at 2.01 ppm only
+    then): they are written conjugated, in the file the writer returns, and read back."""
+    import nibabel as nib
+    import numpy as np
+    basis = _jmrui()
+    written = write_basis(basis, 'niftimrs', 'default', str(tmp_path))
+
+    assert sorted(os.listdir(tmp_path)) == ['Cr391.json', 'Cr391.nii.gz', 'NAA.json', 'NAA.nii.gz']
+    for b, path in zip(basis, written):
+        stored = np.asarray(nib.load(path).dataobj).squeeze()
+        assert np.allclose(stored, np.conj(b['fid']), atol=1e-4 * np.abs(b['fid']).max())
+    for b, c in zip(basis, load_basis(written, detect_format(written)['format'])):
+        assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max())
+
+
+def test_the_nifti_mrs_samples_are_the_simulation_the_others_hold():
+    """The NIfTI-MRS sample set is the conjugated files of the conj step: read, they are the
+    jMRUI sample's FIDs."""
+    import numpy as np
+    files = [os.path.join(SAMPLES, 'NIFTI-MRS', name) for name in ('NAA.nii.gz', 'Cr391.nii.gz')]
+    for b, c in zip(_jmrui(), load_basis(files, 'NIfTI-MRS')):
+        assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max()), b['name']
+
+
+def test_a_ppmcalib_is_not_taken_as_the_centre(tmp_path):
+    """MARSS files state a ppmCalib of 4.675, but their functions are at 4.65 (read there, NAA is at
+    2.008 ppm): Osprey and SpinWizard state 4.65 for them, and their priors are the jMRUI sample's,
+    which holds the same FIDs and states no ppmCalib."""
+    folder = os.path.join(SAMPLES, 'MARSS', 'basis_functions_metab_mm_mat')
+    marss = load_basis([os.path.join(folder, f'{name}.mat') for name in ('NAA', 'Cr391')], 'MARSS .mat')
+    assert {b['ppmCalib'] for b in marss} == {4.675}
+
+    (tmp_path / 'osprey').mkdir()
+    written = write_basis(marss, 'osprey', 'default', str(tmp_path / 'osprey'), te=26.0)
+    assert {b['centerFreq'] for b in load_basis(written, detect_format(written)['format'])} == {4.65}
+    (tmp_path / 'spinwizard').mkdir()
+    write_basis(marss, 'spinwizard', 'default', str(tmp_path / 'spinwizard'))
+    assert float(open(tmp_path / 'spinwizard' / 'BasisRFOffset.txt').read()) == 4.65
+
+    import re
+    import numpy as np
+    number = r'-?\d+\.\d+(?:[eE][-+]?\d+)?'
+
+    def priors(basis, tool):
+        """The text of the priors without paths and dates, and their numbers."""
+        outdir = tmp_path / f'{tool}_{basis[0]["source"].split(".")[-1]}'
+        outdir.mkdir()
+        path = write_basis(basis, tool, 'default', str(outdir))[0]
+        lines = [l for l in open(path).read().splitlines() if os.sep not in l and
+                 not any(w in l.lower() for w in ('source', 'date', 'time', 'created', 'generated'))]
+        return [re.sub(number, '#', l) for l in lines], [float(x) for l in lines for x in re.findall(number, l)]
+    for tool in ('vespa_analysis', 'midas', 'gava', 'oxsa'):
+        (text, values), (text_j, values_j) = priors(marss, tool), priors(_jmrui(), tool)
+        assert text == text_j and np.allclose(values, values_j, rtol=1e-6, atol=1e-9), tool
+
+
+def _osprey(basis, tmp_path):
+    """The BASIS struct the Osprey writer saves: its names, FIDs, spectra and ppm axis."""
+    import numpy as np
+    import scipy.io as sio
+    path = write_basis(basis, 'osprey', 'default', str(tmp_path), te=26.0)[0]
+    b = sio.loadmat(path, squeeze_me=True, struct_as_record=False)['BASIS']
+    names = [str(n) for n in np.ravel(b.name)]
+    return names, np.asarray(b.fids), np.asarray(b.specs), np.asarray(b.ppm).ravel()
+
+
+def test_osprey_macromolecules_are_osprey_own(tmp_path):
+    """The Osprey writer builds Osprey's MM and lipids as its fit_makeBasis does: in proton
+    equivalents of a third of creatine's 3.027 ppm singlet, Gaussians of decay 1 / (pi lw)."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'NAA')], 'jMRUI .txt')
+    names, fids, specs, ppm = _osprey(basis, tmp_path)
+    cr, mm12 = np.real(specs[:, names.index('Cr')]), np.real(specs[:, names.index('MM12')])
+
+    # three protons for creatine's singlet, two for MM12 (Osprey's Lorentzian area, near the sum)
+    singlet = cr[(ppm > 3.027 - 0.1) & (ppm < 3.027 + 0.1)].sum()
+    assert abs(mm12.sum() / singlet / (2 / 3) - 1) < 0.15
+    n = 16 * len(mm12)                                                       # its width, finely sampled
+    fine = np.real(np.fft.fftshift(np.fft.fft(fids[:, names.index('MM12')], n)))
+    half = np.flatnonzero(fine > fine.max() / 2)
+    width = (half[-1] - half[0]) * (ppm[1] - ppm[0]) * len(mm12) / n
+    assert abs(width - 2 * np.sqrt(2 * np.log(2)) / 2 * 0.15) < 0.005     # decay 1 / (pi lw), lw 0.15 ppm
+
+
+def test_a_macromolecule_the_set_brings_takes_osprey_own_place(tmp_path):
+    """A set's MM09 is a macromolecule: it is written as MM09, in place of Osprey's Gaussian, not as
+    a lipid; Osprey's own Lip09 is added beside it."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'MM09')], 'jMRUI .txt')
+    names, fids, _, _ = _osprey(basis, tmp_path)
+    given = next(b for b in basis if b['name'] == 'MM09')['fid'][1:]
+
+    assert names.count('MM09') == 1 and 'Lip09' in names
+    written = fids[1:len(given) + 1, names.index('MM09')]                    # from the second point:
+    scale = np.vdot(given, written) / np.vdot(given, given)                  # its DC correction
+    assert np.linalg.norm(written - scale * given) < 1e-6 * np.linalg.norm(written)
+
+
+def test_creatine_parts_named_as_lcmodel_keeps_them_are_summed_for_osprey(tmp_path):
+    """The FSL-MRS sample names creatine's parts as LCModel keeps names, six characters (CrNo39,
+    PCrNo3): they are still the parts Osprey's Cr and PCr are summed from, CH3 and CH2 in one."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'FSL-MRS')
+    basis = load_basis([os.path.join(folder, f'{p}.json') for p in ('Cr391', 'CrNo39', 'PCr393', 'PCrNo3')],
+                       'FSL-MRS .json')
+    names, _, specs, ppm = _osprey(basis, tmp_path)
+
+    assert 'CrNo39' not in names and 'PCrNo3' not in names
+    for name in ('Cr', 'PCr'):
+        spec = np.real(specs[:, names.index(name)])
+        ch3, ch2 = (spec[(ppm > c - 0.1) & (ppm < c + 0.1)].sum() for c in (3.027, 3.913))
+        assert abs(ch3 / ch2 / (3 / 2) - 1) < 0.15, name
+
+
+def test_osprey_macromolecules_can_be_left_out_as_fit_makebasis_leaves_them(tmp_path):
+    """add_mm=False is fit_makeBasis's addMMFlag 0: the set's own MM and MM09 are kept as they are, none
+    of Osprey's MM and lipids are added; the H2O Osprey's water fit takes is still there."""
+    import numpy as np
+    import scipy.io as sio
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'NAA', 'MM', 'MM09')],
+                       'jMRUI .txt')
+    path = write_basis(basis, 'osprey', 'mat', str(tmp_path), te=26.0, add_mm=False)[0]
+    b = sio.loadmat(path, squeeze_me=True, struct_as_record=False)['BASIS']
+    names = [str(n) for n in np.ravel(b.name)]
+
+    assert sorted(names) == ['Cr', 'H2O', 'MM', 'MM09', 'NAA'] and b.flags.addedMM == 0
+    given = {x['name']: np.asarray(x['fid'])[1:] for x in basis}
+    scale = np.vdot(given['NAA'], b.fids[1:, names.index('NAA')]) / np.vdot(given['NAA'], given['NAA'])
+    for name in ('MM', 'MM09'):                                          # unscaled: as NAA is
+        written = b.fids[1:, names.index(name)]
+        assert np.linalg.norm(written - scale * given[name]) < 1e-6 * np.linalg.norm(written), name
+
+
+def test_matlab_structs_state_their_size_as_a_double(tmp_path):
+    """FID-A, MRSCloud and Osprey files hold one struct, stating sz as MATLAB's size() gives it, a
+    double: Osprey's fit_makeBasis loads one struct per file, and an integer sz rounds its arithmetic."""
+    import numpy as np
+    import scipy.io as sio
+    for tool in ('fida', 'mrscloud', 'osprey'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        path = write_basis(_jmrui(), tool, 'default', str(outdir), te=26.0)[0]
+        saved = {k: v for k, v in sio.loadmat(path, squeeze_me=True, struct_as_record=False).items()
+                 if not k.startswith('_')}
+        assert len(saved) == 1, tool
+        assert np.asarray(next(iter(saved.values())).sz).dtype == float, tool
+
+
+def test_a_profit_file_with_one_metabolite_is_profit(tmp_path):
+    """A 1x1 cell loads as the array it holds: ProFit is told by its fields, not by a cell array."""
+    import numpy as np
+    naa = load_basis([os.path.join(SAMPLES, 'JMRUI', 'NAA.txt')], 'jMRUI .txt')
+    written = write_basis(naa, 'profit', 'default', str(tmp_path))
+    found = detect_format(written)
+
+    assert found['format'] == 'ProFit .mat'
+    assert np.allclose(load_basis(written, found['format'])[0]['fid'], naa[0]['fid'])
+
+
+def test_a_writer_that_writes_nothing_says_so(tmp_path):
+    """The writers that write a file per function carry on past one that fails, but not past all:
+    into a folder that cannot be written, none is written, and they say so."""
+    import pytest
+    for tool in ('fida', 'marss', 'mrscloud', 'fsLmrs', 'lcmodel'):
+        outdir = tmp_path / tool
+        outdir.mkdir()
+        outdir.chmod(0o500)
+        try:
+            with pytest.raises(RuntimeError, match='Nothing written'):
+                write_basis(_jmrui(), tool, 'raw' if tool == 'lcmodel' else 'default', str(outdir))
+        finally:
+            outdir.chmod(0o700)
+
+
+def test_the_osprey_sample_states_the_centre_it_is_at(tmp_path):
+    """The OSPREY sample is the COWS MARSS set, at 4.65 ppm: it states 4.65, and read there NAA is
+    at 2.008 ppm."""
+    import numpy as np
+    naa = next(b for b in load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')],
+                                     'Osprey .mat') if b['name'] == 'NAA')
+    fid, sw, sf = naa['fid'], naa['sw'], naa['sf']
+    n = 16 * len(fid)
+    spec = np.real(np.fft.fftshift(np.fft.ifft(fid * np.exp(-np.pi * np.arange(len(fid)) / sw), n)))
+    ppm = naa['centerFreq'] - np.fft.fftshift(np.fft.fftfreq(n, 1 / sw)) / sf
+    window = (ppm > 1.9) & (ppm < 2.1)
+
+    assert naa['centerFreq'] == 4.65
+    assert abs(ppm[window][np.argmax(spec[window])] - 2.008) < 0.003
+
+
+def test_the_osprey_sample_holds_creatine_and_water_as_osprey_does(tmp_path):
+    """The OSPREY sample is the MARSS set as the Osprey writer writes it: its Cr and PCr hold the CH3
+    and the CH2 (three protons to two), and its H2O is below its metabolites."""
+    import numpy as np
+    basis = {b['name']: b for b in load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')],
+                                              'Osprey .mat')}
+    def spectrum(b):
+        fid, sw, sf = b['fid'], b['sw'], b['sf']
+        ppm = b['centerFreq'] - np.fft.fftshift(np.fft.fftfreq(len(fid), 1 / sw)) / sf
+        return np.real(np.fft.fftshift(np.fft.ifft(fid * np.exp(-np.pi * np.arange(len(fid)) / sw)))), ppm
+
+    for name in ('Cr', 'PCr'):
+        spec, ppm = spectrum(basis[name])
+        ch3, ch2 = (spec[(ppm > c - 0.1) & (ppm < c + 0.1)].sum() for c in (3.027, 3.913))
+        assert abs(ch3 / ch2 / (3 / 2) - 1) < 0.15, name
+    peak = lambda name: spectrum(basis[name])[0].max()
+    assert peak('H2O') < max(peak(n) for n in ('NAA', 'Cr', 'PCh'))
+
+
+def test_text_formats_keep_a_basis_in_double_precision(tmp_path):
+    """.BASIS, .raw, NIfTI-MRS (written by spec2nii from a .raw), jMRUI and SpinWizard files are
+    text, or made from text: written with 17 digits, they give back the FIDs they were given."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'MARSS', 'basis_functions_metab_mm_mat')
+    basis = load_basis([os.path.join(folder, f'{name}.mat') for name in ('NAA', 'GPC')], 'MARSS .mat')
+    for tool, fmt in [('lcmodel', 'basis'), ('lcmodel', 'raw'), ('niftimrs', 'default'),
+                      ('jmrui', 'default'), ('spinwizard', 'default')]:
+        written = write_basis(basis, tool, fmt, str(tmp_path / f'{tool}_{fmt}'), te=26.0)
+        back = {b['name']: b for b in load_basis(written, detect_format(written)['format'],
+                                                  sw=basis[0]['sw'], sf=basis[0]['sf'])}
+        for b in basis:
+            a, c = np.asarray(b['fid']), np.asarray(back[b['name']]['fid'])[:len(b['fid'])]
+            assert np.linalg.norm(c - a) < 1e-12 * np.linalg.norm(a), (tool, fmt, b['name'])
+
+
+def test_osprey_water_is_left_out_of_other_formats_as_osprey_exports_them(tmp_path):
+    """Osprey's H2O is for its water-reference fit: kept in an Osprey .mat, and left out of the
+    formats other tools fit with, as Osprey's io_writelcmBASIS and io_writeTarquinBASIS leave it out."""
+    basis = load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')], 'Osprey .mat')
+    assert 'H2O' in [b['name'] for b in basis]
+
+    lcm = write_basis(basis, 'lcmodel', 'basis', str(tmp_path / 'lcm'))
+    fsl = write_basis(basis, 'fsLmrs', 'default', str(tmp_path / 'fsl'))
+    osp = write_basis(basis, 'osprey', 'mat', str(tmp_path / 'osp'), te=26.0)
+
+    for written in (lcm, fsl):
+        names = [b['name'] for b in load_basis(written, detect_format(written)['format'])]
+        assert 'H2O' not in names and 'NAA' in names
+    assert 'H2O' in [b['name'] for b in load_basis(osp, 'Osprey .mat')]
+
+
+def test_a_set_written_for_osprey_reads_back_as_it_was_given(tmp_path):
+    """Osprey's model changes a set (its names, creatine's parts summed, the first point, the scale)
+    and adds to it (MM, lipids, water); the .mat holds the set as given, which is read back."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'MARSS', 'basis_functions_metab_mm_mat')
+    files = [os.path.join(folder, f) for f in sorted(os.listdir(folder)) if f.endswith('.mat')]
+    basis = load_basis(files, 'MARSS .mat')
+    for add_mm in (True, False):
+        written = write_basis(basis, 'osprey', 'mat', str(tmp_path / str(add_mm)), te=26.0, add_mm=add_mm)
+        back = load_basis(written, 'Osprey .mat')
+
+        assert [b['name'] for b in back] == [b['name'] for b in basis]
+        for a, b in zip(basis, back):
+            assert np.array_equal(np.asarray(a['fid']), b['fid']) and not b['water_ref']
+
+
+def test_an_osprey_set_written_for_osprey_again_keeps_its_water_out_of_other_formats(tmp_path):
+    """An Osprey set's H2O, read back from the .mat BasiC wrote of it, is still Osprey's water."""
+    basis = load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')], 'Osprey .mat')
+    mat = write_basis(basis, 'osprey', 'mat', str(tmp_path / 'osp'), te=26.0)
+    back = load_basis(mat, 'Osprey .mat')
+    assert [b['water_ref'] for b in back] == [b['water_ref'] for b in basis] and any(b['water_ref'] for b in back)
+
+    lcm = write_basis(back, 'lcmodel', 'basis', str(tmp_path / 'lcm'))
+    assert 'H2O' not in [b['name'] for b in load_basis(lcm, 'LCModel .BASIS')]
+
+
+def test_an_osprey_set_changed_since_basic_wrote_it_is_read_as_osprey_holds_it(tmp_path):
+    import numpy as np
+    import scipy.io as sio
+    written = write_basis(_jmrui(), 'osprey', 'mat', str(tmp_path), te=26.0)[0]
+    mat = sio.loadmat(written)
+    mat['BASIS'][0, 0]['fids'][:, 0] *= 2
+    sio.savemat(written, {'BASIS': mat['BASIS']})
+
+    back = {b['name']: b for b in load_basis([written], 'Osprey .mat')}
+    assert {'NAA', 'Cr', 'H2O'} <= set(back) and back['H2O']['water_ref']
+
+
+def test_mrscloud_files_hold_the_fields_fit_makebasis_reads(tmp_path):
+    """Osprey's fit_makeBasis reads FID-A's te and seq of each file, which MRSCloud's own files
+    leave out: written, an MRSCloud file holds them, and its echo time is read back."""
+    import scipy.io as sio
+    basis = [dict(b, te=26.0) for b in _jmrui()]
+    written = write_basis(basis, 'mrscloud', 'default', str(tmp_path))
+
+    out = sio.loadmat(written[0], simplify_cells=True)['outA']
+    assert out['seq'] == 'unedited' and out['te'] == 26.0
+    assert [b['te'] for b in load_basis(written, 'MRSCloud .mat')] == [b['te'] for b in basis]
+
+
+def test_fsl_mrs_keeps_the_echo_time_and_nifti_mrs_the_linewidth(tmp_path):
+    """Neither format has a field for them: FSL-MRS's meta, which FSL-MRS does not read, holds the
+    echo time (EchoTime, s, as NIfTI-MRS states it), and a user-defined NIfTI-MRS key the linewidth."""
+    basis = [dict(b, te=26.0, linewidth=2.5) for b in _jmrui()]
+    for tool, field in (('fsLmrs', 'te'), ('niftimrs', 'linewidth')):
+        written = write_basis(basis, tool, 'default', str(tmp_path / tool), te=26.0)
+        back = load_basis(written, detect_format(written)['format'])
+        assert [b[field] for b in back] == [b[field] for b in basis], tool
+
+
+def test_osprey_water_is_two_protons_beside_the_metabolites(tmp_path):
+    """Osprey scales the data to its metabolites' peak, and its own sets peak in a metabolite: the
+    synthetic H2O is two protons by area, below them, so the set is not normalised to the water."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'NAA', 'GPC')], 'jMRUI .txt')
+    names, _, specs, ppm = _osprey(basis, tmp_path)
+    peaks = np.max(np.real(specs), axis=0)
+    water, cr = np.real(specs[:, names.index('H2O')]), np.real(specs[:, names.index('Cr')])
+
+    assert max(peaks[names.index(n)] for n in ('Cr', 'NAA', 'GPC')) == peaks.max() == 1.0
+    singlet = cr[(ppm > 3.027 - 0.1) & (ppm < 3.027 + 0.1)].sum()            # three protons
+    assert abs(water.sum() / singlet / (2 / 3) - 1) < 0.15

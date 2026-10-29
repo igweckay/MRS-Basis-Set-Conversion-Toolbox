@@ -37,6 +37,8 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import scipy.io as sio
 
+from writers.centre import at_centre
+
 
 ############## Literature chemical shift table (from metabList.mat) #############
 # Loaded dynamically from metabList.mat if available, otherwise uses hardcoded
@@ -78,7 +80,7 @@ METAB_PPM_TABLE = {
     'NAAG'    : [2.042, 4.128, 1.881, 2.049, 2.190, 4.607, 2.721, 2.519],
 }
 
-PPM_CALIB = 4.65   # default; overridden per-file from core['ppmCalib'] if present
+PPM_CALIB = 4.65   # the centre the set is read at (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
 
 
 ############## Main entry point #############
@@ -98,6 +100,7 @@ def write_vespa(basis_list, outpath,
     source         : str, source description
     metablist_path : str or None, path to metabList.mat for literature shifts
     """
+    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 
@@ -132,8 +135,8 @@ def write_vespa(basis_list, outpath,
         # Get literature PPM positions for this metabolite
         lit_ppms = _get_lit_ppms(met_name, ppm_table)
 
-        # Use ppmCalib from file if available (MARSS stores 4.675, not 4.65)
-        ppm_calib = float(core.get('ppmCalib') or PPM_CALIB)
+        # MARSS states a ppmCalib of 4.675, but its sets are at 4.65 (NAA at 2.008 there)
+        ppm_calib = PPM_CALIB
 
         # Get areas and phases at those PPM positions from FFT
         peaks = _peaks_at_ppms(fid, sf, sw, lit_ppms, ppm_calib=ppm_calib)

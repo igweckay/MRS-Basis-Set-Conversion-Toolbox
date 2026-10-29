@@ -3,9 +3,9 @@ writers/write_mrscloud.py
 Basis Set Converter — MRSCloud writer
 
 Writes core struct dicts to MRSCloud .mat format.
-MRSCloud stores one metabolite per .mat file.
+MRSCloud stores one metabolite per .mat file, in one struct, outA.
 
-MRSCloud .mat structure (confirmed from your documentation):
+MRSCloud .mat structure (confirmed from your documentation; outA.<field>):
     fids          - complex FID (n x 1)
     specs         - complex spectrum (n x 1)  fftshift(ifft(fids))
     spectralwidth - bandwidth in Hz
@@ -36,6 +36,8 @@ import numpy as np
 import scipy.io as sio
 from datetime import datetime
 
+from writers.centre import fid_at_centre
+
 
 PROTON_GAMMA = 42577000.0   # Hz/T
 
@@ -52,21 +54,25 @@ def write_mrscloud_file(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid   = np.asarray(core['fid']).ravel().astype(complex)
+    fid   = fid_at_centre(core).astype(complex)   # its ppm axis below is at 4.65
     sw    = float(core['sw'])
     sf    = float(core['sf'])        # MHz
     n     = int(core.get('n', len(fid)))
     name  = str(core.get('name', 'unknown'))
     Bo    = core.get('Bo') or (sf / 42.577)
     txfrq = sf * 1e6                 # MHz → Hz
+    # FID-A's te and seq, which MRSCloud's own files leave out but fit_makeBasis reads of each file
+    te    = float(core['te']) if core.get('te') else 0.0
+    seq   = str(core.get('seq') or 'unedited')
 
     dt    = 1.0 / sw
     # MRSCloud uses ifft convention for specs
     specs = np.fft.fftshift(np.fft.ifft(fid))
 
     t   = np.arange(n) * dt
-    freq= np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / sw))
-    ppm = 4.65 + freq / sf
+    # ppm axis as MRSCloud (FID-A's sim_readout.m) stores it: descending, symmetric about 0 Hz
+    freq= np.linspace(-sw / 2 + sw / (2 * n), sw / 2 - sw / (2 * n), n)
+    ppm = -freq / (Bo * 42.577) + 4.65
 
     dims = {
         't'       : 1.0,
@@ -98,13 +104,15 @@ def write_mrscloud_file(core, outpath):
         'spectralwidth': sw,
         'dwelltime'    : dt,
         'n'            : float(n),
-        'linewidth'    : float(core.get('linewidth', 1.0)),
+        'linewidth'    : 1.0 if core.get('linewidth') is None else float(core['linewidth']),
         'Bo'           : Bo,
         'txfrq'        : txfrq,
         't'            : t.reshape(1, -1),
         'ppm'          : ppm.reshape(1, -1),
-        'sz'           : np.array([n, 1]),
+        'sz'           : np.array([n, 1], dtype=float),     # double, as MATLAB's size() is
         'name'         : name,
+        'te'           : te,
+        'seq'          : seq,
         'dims'         : dims,
         'flags'        : flags,
         'averages'     : 1.0,
@@ -114,7 +122,7 @@ def write_mrscloud_file(core, outpath):
         'date'         : datetime.now().strftime('%d-%b-%Y'),
     }
 
-    sio.savemat(outpath, struct)
+    sio.savemat(outpath, {'outA': struct})     # one struct, as MRSCloud saves it (and fit_makeBasis loads)
 
 
 def write_mrscloud_folder(basis_list, outdir):
@@ -134,10 +142,13 @@ def write_mrscloud_folder(basis_list, outdir):
             print(f"  Written: {name}.mat")
         except Exception as ex:
             failed.append(name)
+            reason = ex
             print(f"  WARNING: failed for {name} — {ex}")
 
     if failed:
         print(f"\n  {len(failed)} failed: {', '.join(failed)}")
+    if failed and not written:
+        raise RuntimeError(f"Nothing written: every basis function failed, the last with: {reason}")
     print(f"\n  Done. {len(written)} MRSCloud .mat files written to: {outdir}")
     return written
 
