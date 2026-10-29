@@ -13,6 +13,7 @@ State read by this screen:
     state['output_tool']    : e.g. 'LCModel'
     state['output_tool_id'] : e.g. 'lcmodel'
     state['output_format']  : e.g. 'both' | 'raw' | 'default'
+    state['add_mm']         : Osprey only: add Osprey's MM and lipids (True if not set)
     state['params']         : user-supplied parameter overrides
 
 State written by this screen:
@@ -419,7 +420,8 @@ class Screen4Convert(BaseScreen):
               self.state.get('params', {}).get('te')
         seq = self.state.get('core', {}).get('seq') or \
               self.state.get('params', {}).get('seq')
-        return write_basis(basis_list, tool_id, out_fmt, outdir, te=te, seq=seq)
+        return write_basis(basis_list, tool_id, out_fmt, outdir, te=te, seq=seq,
+                           add_mm=self.state.get('add_mm', True))
 
     def _ask_output_folder(self):
         pass   # placeholder — actual call is in _convert via threading
@@ -460,7 +462,7 @@ class Screen4Convert(BaseScreen):
                     'core', 'missing_fields', 'ambiguous_options',
                     'compatible_tools', 'format_confirmed',
                     'output_tool', 'output_tool_id', 'output_format',
-                    'output_path', 'params']:
+                    'add_mm', 'output_path', 'params']:
             self.state.pop(key, None)
         self.app.show_screen("screen1")
 

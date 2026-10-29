@@ -14,6 +14,8 @@ State written by this screen:
     state['output_tool']    : str, e.g. 'LCModel'
     state['output_tool_id'] : str, e.g. 'lcmodel'
     state['output_format']  : str, e.g. 'both' / 'mat' / 'default'
+    state['add_mm']         : bool, Osprey only: add Osprey's macromolecules and lipids
+                              (fit_makeBasis's addMMFlag); not set for other tools
 """
 
 import tkinter as tk
@@ -149,6 +151,21 @@ class Screen2Output(BaseScreen):
 
         self._format_var = tk.StringVar()
 
+        # Osprey only: fit_makeBasis's addMMFlag, shown under Osprey's formats
+        self._add_mm_var = tk.BooleanVar(value=True)
+        self.add_mm_row = tk.Frame(self.format_panel, bg="#eff6ff")
+        tk.Checkbutton(
+            self.add_mm_row,
+            text="Add Osprey's macromolecules and lipids (fit_makeBasis addMMFlag)",
+            variable=self._add_mm_var,
+            font=("Helvetica", 10), bg="#eff6ff", fg="#111827",
+            activebackground="#eff6ff", cursor="hand2"
+        ).pack(anchor="w")
+        tk.Label(
+            self.add_mm_row, text="the .mat file only; H2O is added either way",
+            font=("Helvetica", 9), bg="#eff6ff", fg="#6b7280"
+        ).pack(anchor="w", padx=(24, 0))
+
     def _build_info_panel(self):
         self.info_panel = tk.Frame(
             self.scroll_frame, bg="#fefce8",
@@ -203,6 +220,12 @@ class Screen2Output(BaseScreen):
                 row, text=f"  —  {fmt['sub']}",
                 font=("Helvetica", 9), bg="#eff6ff", fg="#6b7280"
             ).pack(side="left")
+
+        if tool['id'] == 'osprey':
+            self._add_mm_var.set(True)
+            self.add_mm_row.pack(fill="x", pady=(8, 0))
+        else:
+            self.add_mm_row.pack_forget()
 
         self.format_panel.pack(fill="x", pady=(8, 0))
 
@@ -329,4 +352,8 @@ class Screen2Output(BaseScreen):
         self.state['output_tool']    = self.selected_tool['name']
         self.state['output_tool_id'] = self.selected_tool['id']
         self.state['output_format']  = self.selected_format or 'default'
+        if self.selected_tool['id'] == 'osprey':
+            self.state['add_mm'] = self._add_mm_var.get()
+        else:
+            self.state.pop('add_mm', None)
         self.app.show_screen("screen3")
