@@ -20,12 +20,12 @@ class BaseScreen(tk.Frame):
     """
 
     STEPS = ["Upload", "Output", "Parameters", "Convert"]
+    current_step = 1          # override in each subclass
 
     def __init__(self, parent, state, app):
         super().__init__(parent, bg="white")
         self.state = state        # shared dict
         self.app   = app          # reference to App for navigation
-        self.current_step = 1     # override in each subclass
 
         self._build_header()
         self._build_step_bar()
