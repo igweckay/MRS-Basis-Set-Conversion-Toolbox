@@ -76,6 +76,7 @@ class Screen3Params(BaseScreen):
     def build_body(self):
         self._entries   = {}   # key → tk.StringVar
         self._tier_data = []   # list of (key, tier, var)
+        self._summary   = {}   # key → its value label in the summary card
 
         # Scrollable body
         outer = tk.Frame(self, bg="white")
@@ -109,6 +110,7 @@ class Screen3Params(BaseScreen):
             w.destroy()
         self._entries   = {}
         self._tier_data = []
+        self._summary   = {}
         self._build_content()
 
     ############## Content #############
@@ -394,28 +396,38 @@ class Screen3Params(BaseScreen):
                 bg="white", fg="#9ca3af"
             ).pack(anchor="w")
 
-            # Get value
-            if key in self._entries:
-                val_str = self._entries[key].get() or "—"
-                color   = "#f59e0b"   # amber for user-supplied
-            elif key in core and core[key]:
-                v = core[key]
-                val_str = f"{v:.4f} {p['unit']}".strip() \
-                          if isinstance(v, float) else f"{v} {p['unit']}".strip()
-                color   = "#065f46"   # green for found in file
-            else:
-                val_str = "—"
-                color   = "#9ca3af"
-
-            tk.Label(
+            self._summary[key] = tk.Label(
                 cell,
-                text=val_str,
                 font=("Helvetica", 10, "bold"),
-                bg="white", fg=color
-            ).pack(anchor="w")
+                bg="white"
+            )
+            self._summary[key].pack(anchor="w")
+            self._show_summary_value(p, core)
+
+            # Follow what the user types or picks
+            if key in self._entries:
+                self._entries[key].trace_add(
+                    'write', lambda *_, p=p: self._show_summary_value(p, core))
 
         for c in range(2):
             grid.columnconfigure(c, weight=1)
+
+    def _show_summary_value(self, p, core):
+        """Write a parameter's current value into its label in the summary card."""
+        key = p['key']
+        if key in self._entries:
+            val_str = self._entries[key].get() or "—"
+            color   = "#f59e0b"   # amber for user-supplied
+        elif key in core and core[key]:
+            v = core[key]
+            val_str = f"{v:.4f} {p['unit']}".strip() \
+                      if isinstance(v, float) else f"{v} {p['unit']}".strip()
+            color   = "#065f46"   # green for found in file
+        else:
+            val_str = "—"
+            color   = "#9ca3af"
+
+        self._summary[key].config(text=val_str, fg=color)
 
     ############## Footer #############
 
