@@ -7,7 +7,8 @@ stubbed out, so no display is needed. The parameters summary: screen 3 is built 
 hidden Tk root and typed into; the test is skipped when Tk cannot open a window.
 Osprey's macromolecules: screen 2 is built on a hidden Tk root and its tools picked,
 skipped likewise; screen 4 writes the .mat with its widgets stubbed out, as for the
-step bar.
+step bar. Several basis sets in one folder: screen 1 is built on a hidden Tk root, given
+each folder and one of its sets picked, skipped likewise.
 
 The screens are imported in a separate Python, so that tkinter stays out of this
 process and the other tests can still check that core runs without it.
@@ -274,3 +275,104 @@ def test_screen_4_leaves_osprey_macromolecules_out_when_screen_2_says_so(tmp_pat
     assert written(left_out) == (['Cr', 'H2O', 'MM', 'MM09', 'NAA'], 0)
     names, flag = written(added)
     assert ospreys <= set(names) and flag == 1
+
+
+SETS_PICKED = """
+import json
+import os
+import tkinter as tk
+from tkinter import ttk
+
+try:
+    root = tk.Tk()
+except tk.TclError as error:
+    print(error)
+    raise SystemExit(3)
+root.withdraw()
+
+from core.load import load_basis
+from screen1_upload import Screen1Upload
+
+
+def widgets(widget):
+    yield widget
+    for child in widget.winfo_children():
+        yield from widgets(child)
+
+
+def seen_now():
+    labels = [w.cget('text') for w in widgets(screen.result_frame) if isinstance(w, tk.Label)]
+    boxes = [w for w in widgets(screen.result_frame) if isinstance(w, ttk.Combobox)]
+    return {
+        'titles': [t for t in labels if t in ('Basis set', 'Detected format')],
+        'badges': [t[1:].strip() for t in labels if t[:1] in '✓⚠✗'],
+        'dropdowns': [[str(v) for v in box.cget('values')] for box in boxes],
+        'shown': [box.get() for box in boxes],
+        'next': str(screen.next_btn.cget('state')),
+    }
+
+
+def pick(name):
+    box = next(w for w in widgets(screen.result_frame) if isinstance(w, ttk.Combobox)
+               and name in [str(v) for v in w.cget('values')])
+    box.set(name)
+    box.event_generate('<<ComboboxSelected>>')
+    seen = seen_now()
+    seen['files'] = len(state['files'])
+    seen['format'] = state['detected_format']
+    seen['loaded'] = len(load_basis(state['files'], state['detected_format']))
+    return seen
+
+
+class App:                               # what the screen asks of main.App
+    def quit(self):
+        pass
+
+    def show_screen(self, name):
+        pass
+
+
+samples = os.path.join('..', 'sample_basis_sets')
+seen = {}
+for folder, picks in ((('LCModel', 'BASIS_file'), ['SLASER_Siemens26.basis',
+                                                   'LCModel_Siemens_UnEdited_sLASER_105_.BASIS']),
+                      (('MRSCLOUD',), ['Siemens_UnEdited_sLASER_TE105_*.mat',
+                                       'BASIS_Siemens_UnEdited_sLASER_105_wMM.mat']),
+                      (('JMRUI',), [])):
+    state = {}
+    screen = Screen1Upload(root, state, App())
+    path = os.path.join(samples, *folder)
+    screen._load_files([os.path.join(path, f) for f in os.listdir(path)])
+    seen[folder[0]] = [seen_now()] + [pick(name) for name in picks]
+print(json.dumps(seen))
+"""
+
+
+@pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
+def test_screen_1_lets_the_user_pick_one_of_several_basis_sets_and_converts_only_that_one():
+    run = subprocess.run([sys.executable, '-c', SETS_PICKED], capture_output=True, text=True,
+                         cwd=os.path.join(ROOT, 'basis_converter'))
+    if run.returncode == 3:
+        pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
+
+    assert run.returncode == 0, run.stderr
+    seen = json.loads(run.stdout.splitlines()[-1])
+    lcmodel = ['LCModel_Siemens_UnEdited_sLASER_105_.BASIS', 'SLASER_Siemens26.basis']
+    mrscloud = ['BASIS_Siemens_UnEdited_sLASER_105_wMM.mat', 'Siemens_UnEdited_sLASER_TE105_*.mat']
+    unpicked = {'titles': ['Basis set'], 'badges': ['Pick a set'], 'shown': [''], 'next': 'disabled'}
+    picked = {'titles': ['Basis set', 'Detected format'], 'badges': ['Picked', 'Recognized'],
+              'next': 'normal'}
+    assert seen['LCModel'] == [
+        dict(unpicked, dropdowns=[lcmodel]),
+        dict(picked, dropdowns=[lcmodel], shown=['SLASER_Siemens26.basis'],
+             files=1, format='LCModel .BASIS', loaded=22),
+        dict(picked, dropdowns=[lcmodel], shown=['LCModel_Siemens_UnEdited_sLASER_105_.BASIS'],
+             files=1, format='LCModel .BASIS', loaded=25),
+    ]
+    assert seen['MRSCLOUD'][0] == dict(unpicked, dropdowns=[mrscloud])
+    assert seen['MRSCLOUD'][1] == dict(picked, dropdowns=[mrscloud], shown=['Siemens_UnEdited_sLASER_TE105_*.mat'],
+                                       files=25, format='MRSCloud .mat', loaded=25)
+    assert seen['MRSCLOUD'][2] == dict(picked, dropdowns=[mrscloud], shown=['BASIS_Siemens_UnEdited_sLASER_105_wMM.mat'],
+                                       files=1, format='Osprey .mat', loaded=33)
+    assert seen['JMRUI'] == [{'titles': ['Detected format'], 'badges': ['Recognized'], 'dropdowns': [],
+                              'shown': [], 'next': 'normal'}]

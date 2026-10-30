@@ -10,15 +10,19 @@ What this screen does:
     2. Calls detect_format() to identify what was uploaded
     3. Shows the detected format, file list, and extracted metadata
     4. If format is ambiguous, shows a dropdown to let the user confirm
+       (likewise, if the files hold several basis sets, to pick the one to convert)
     5. If partial data is found, warns the user but allows proceeding
     6. If nothing usable, shows an error and blocks Next
 
 State written by this screen:
     state['files']            : list of file paths
     state['detected_format']  : string name of detected format
-    state['detection_status'] : 'full' | 'partial' | 'ambiguous' | 'failed'
+    state['detection_status'] : 'full' | 'partial' | 'ambiguous' | 'several' | 'failed'
     state['core']             : dict with whatever fields could be extracted
     state['missing_fields']   : list of field names not found
+    state['uploaded_files']   : every file uploaded ('files' holds the picked set's only)
+    state['basis_sets']       : the sets found, when the upload holds more than one
+    state['set_picked']       : index of the set picked among them, None until then
 """
 
 import os
@@ -235,7 +239,16 @@ class Screen1Upload(BaseScreen):
         # Run format detection
         result = detect_format(paths)
 
-        # Write results to shared state
+        # Several basis sets: each is a detect_format result of its own, applied once picked
+        self.state['uploaded_files'] = paths
+        self.state['basis_sets']     = result.get('sets', [])
+        self.state['set_picked']     = None
+
+        self._apply_detection(result)
+        self._show_result()
+
+    def _apply_detection(self, result):
+        """Write a detect_format result to the shared state."""
         self.state['detected_format']    = result.get('format', 'Unknown')
         self.state['detection_status']   = result.get('status', 'failed')
         self.state['core']               = result.get('data', {})
@@ -244,11 +257,15 @@ class Screen1Upload(BaseScreen):
         self.state['compatible_tools']   = result.get('compatible_tools', [])
         self.state['format_confirmed']   = False   # reset on new load
 
-        self._show_result()
-
     def _show_result(self):
         """Draw the detection result card based on current state."""
         self._clear_result()
+
+        if self.state.get('basis_sets'):
+            self._show_sets_card()
+            if self.state.get('set_picked') is None:
+                self._disable_next()
+                return
 
         status    = self.state.get('detection_status', 'failed')
         confirmed = self.state.get('format_confirmed', False)
@@ -285,14 +302,17 @@ class Screen1Upload(BaseScreen):
         return inner
 
     def _card_header(self, card, format_text, badge_text, badge_color,
-                     badge_fg, show_dropdown=False, dropdown_options=None):
-        """Draw the top row of a result card."""
+                     badge_fg, show_dropdown=False, dropdown_options=None,
+                     title="Detected format", on_select=None, value=None,
+                     show_tools=True):
+        """Draw the top row of a result card. The dropdown confirms the format,
+        or, given on_select, calls it when an option is picked."""
         header = tk.Frame(card, bg=card["bg"])
         header.pack(fill="x", pady=(0, 4))
 
         tk.Label(
             header,
-            text="Detected format",
+            text=title,
             font=("Helvetica", 9),
             bg=card["bg"],
             fg="#6b7280"
@@ -300,17 +320,22 @@ class Screen1Upload(BaseScreen):
 
         if show_dropdown and dropdown_options:
             # Ambiguous — show a dropdown
-            self.format_var = tk.StringVar(value=dropdown_options[0])
+            var = tk.StringVar(value=dropdown_options[0] if value is None else value)
             dropdown = ttk.Combobox(
                 header,
-                textvariable=self.format_var,
+                textvariable=var,
                 values=dropdown_options,
                 state="readonly",
-                width=22,
+                width=max(22, max(len(o) for o in dropdown_options)),
                 font=("Helvetica", 10)
             )
             dropdown.pack(side="left", padx=(8, 0))
-            dropdown.bind("<<ComboboxSelected>>", self._on_format_confirmed)
+            if on_select is None:
+                self.format_var = var
+                dropdown.bind("<<ComboboxSelected>>", self._on_format_confirmed)
+            else:
+                self.set_var = var
+                dropdown.bind("<<ComboboxSelected>>", on_select)
         else:
             tk.Label(
                 header,
@@ -331,7 +356,7 @@ class Screen1Upload(BaseScreen):
         ).pack(side="right")
 
         # Compatible tools row
-        tools = self.state.get('compatible_tools', [])
+        tools = self.state.get('compatible_tools', []) if show_tools else []
         if tools:
             tools_row = tk.Frame(card, bg=card["bg"])
             tools_row.pack(fill="x", pady=(0, 6))
@@ -697,6 +722,55 @@ class Screen1Upload(BaseScreen):
         self._card_files(card, self.state['files'])
         self._card_metadata(card)
 
+    def _show_sets_card(self):
+        """The files hold several basis sets: a dropdown picks the one to convert.
+        Once picked, the card stays above the set's own card, to pick another."""
+        sets   = self.state['basis_sets']
+        picked = self.state.get('set_picked')
+        if picked is None:
+            card = self._card_frame(border_color="#fde68a", bg_color="#fffbeb")
+            badge_text, badge_color, badge_fg = "⚠  Pick a set", "#fde68a", "#92400e"
+            note = (f"These files hold {len(sets)} basis sets. Pick the one to "
+                    f"convert; only its files are converted.")
+        else:
+            card = self._card_frame(border_color="#bbf7d0", bg_color="#f0fdf4")
+            badge_text, badge_color, badge_fg = "✓  Picked", "#bbf7d0", "#065f46"
+            note = (f"Set {picked + 1} of the {len(sets)} these files hold; "
+                    f"only its files are converted.")
+        self._card_header(
+            card,
+            format_text="",
+            badge_text=badge_text,
+            badge_color=badge_color,
+            badge_fg=badge_fg,
+            show_dropdown=True,
+            dropdown_options=[s['name'] for s in sets],
+            title="Basis set",
+            on_select=self._on_set_picked,
+            value="" if picked is None else sets[picked]['name'],
+            show_tools=False
+        )
+        if picked is None:
+            self._card_files(card, self.state.get('uploaded_files', []))
+            for s in sets:
+                tk.Label(
+                    card,
+                    text=f"{s['name']}:  {s['format']}, "
+                         f"{len(s['data'].get('names') or [])} metabolites",
+                    font=("Helvetica", 9),
+                    bg=card["bg"],
+                    fg="#374151"
+                ).pack(anchor="w", pady=(4, 0))
+        tk.Label(
+            card,
+            text=note,
+            font=("Helvetica", 9),
+            bg=card["bg"],
+            fg=badge_fg,
+            wraplength=560,
+            justify="left"
+        ).pack(anchor="w", pady=(8, 0))
+
     def _show_partial_card(self):
         card = self._card_frame(border_color="#fde68a", bg_color="#fffbeb")
         self._card_header(
@@ -748,7 +822,20 @@ class Screen1Upload(BaseScreen):
             justify="left"
         ).pack(anchor="w", pady=(8, 0))
 
-    ############## Dropdown callback #############
+    ############## Dropdown callbacks #############
+
+    def _on_set_picked(self, event):
+        """User picked one of several basis sets: from now on only its files
+        and its detected format are in the state."""
+        sets  = self.state.get('basis_sets', [])
+        names = [s['name'] for s in sets]
+        if self.set_var.get() not in names:
+            return
+        picked = names.index(self.set_var.get())
+        self.state['set_picked'] = picked
+        self.state['files']      = sets[picked]['files']
+        self._apply_detection(sets[picked])
+        self._show_result()
 
     def _on_format_confirmed(self, event):
         """
@@ -895,7 +982,8 @@ class Screen1Upload(BaseScreen):
         """Reset screen and shared state."""
         for key in ['files', 'detected_format', 'detection_status',
                     'core', 'missing_fields', 'ambiguous_options',
-                    'compatible_tools', 'format_confirmed']:
+                    'compatible_tools', 'format_confirmed',
+                    'uploaded_files', 'basis_sets', 'set_picked']:
             self.state.pop(key, None)
         self._clear_result()
         self._disable_next()

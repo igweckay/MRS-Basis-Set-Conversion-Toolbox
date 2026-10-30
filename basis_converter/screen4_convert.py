@@ -461,6 +461,7 @@ class Screen4Convert(BaseScreen):
         for key in ['files', 'detected_format', 'detection_status',
                     'core', 'missing_fields', 'ambiguous_options',
                     'compatible_tools', 'format_confirmed',
+                    'uploaded_files', 'basis_sets', 'set_picked',
                     'output_tool', 'output_tool_id', 'output_format',
                     'add_mm', 'output_path', 'params']:
             self.state.pop(key, None)

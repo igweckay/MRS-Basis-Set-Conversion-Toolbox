@@ -6,12 +6,14 @@ Given a list of file paths, figures out what format they are,
 reads one file to extract real metadata, and returns it for display.
 
 Returns a dict with:
-    'status'            : 'full' | 'partial' | 'ambiguous' | 'failed'
+    'status'            : 'full' | 'partial' | 'ambiguous' | 'several' | 'failed'
     'format'            : string name, e.g. 'LCModel .BASIS'
     'ambiguous_options' : list of possible format strings (only if ambiguous)
     'data'              : dict — core struct with real extracted values
     'missing'           : list of field names not found
     'message'           : human-readable explanation
+    'sets'              : only if 'several' (the files hold more than one basis set):
+                          one detect_format result per set, with its 'name' and 'files'
 """
 
 import os
@@ -53,6 +55,11 @@ def _detect_format_inner(paths):
 
     extensions = set(os.path.splitext(p)[1].lower() for p in paths)
     n_files    = len(paths)
+
+    if n_files > 1:
+        result = _try_several_sets(paths)
+        if result:
+            return result
 
     if n_files == 1 and extensions == {'.basis'}:
         return _try_lcmodel_basis(paths[0])
@@ -149,6 +156,87 @@ def _detect_format_inner(paths):
         return _try_mixed(paths)
 
     return _failed("File format not recognized.")
+
+
+############## Several basis sets in one selection #############
+
+# The variables a .mat file holds a whole set in: Osprey's (and MRSCloud's combined
+# BASIS_*.mat) BASIS, ProFit's basis, INSPECTOR's lcmBasis.
+WHOLE_SET_VARIABLES = {'BASIS', 'basis', 'lcmBasis', 'lcmbasis'}
+
+
+def _mat_variables(path):
+    """The names of a .mat file's variables, read without loading their data."""
+    try:
+        import scipy.io as sio
+        return {name for name, _, _ in sio.whosmat(path)}
+    except NotImplementedError:          # v7.3, an HDF5 file
+        try:
+            import h5py
+            with h5py.File(path, 'r') as f:
+                return set(f.keys())
+        except Exception:
+            return set()
+    except Exception:
+        return set()
+
+
+def _set_name(files):
+    """A set's name: its file, or the pattern its files share."""
+    if len(files) == 1:
+        return os.path.basename(files[0])
+    names  = [os.path.basename(f) for f in files]
+    prefix = os.path.commonprefix(names)
+    return f"{prefix}*{os.path.splitext(names[0])[1]}"
+
+
+def _try_several_sets(paths):
+    """
+    A selection holding more than one complete basis set: several .BASIS files, or
+    single-metabolite .mat files beside a .mat that holds a whole set (MRSCloud's
+    Siemens_..._TE105_*.mat and its BASIS_*.mat). Each .BASIS file and each whole-set
+    .mat is a set; the other .mat files together are one. Returns None for one set, or
+    when the selection holds other files, and then detection goes on as before.
+    """
+    exts = {os.path.splitext(p)[1].lower() for p in paths}
+    if not exts <= {'.basis', '.mat'}:
+        return None
+
+    groups  = [[p] for p in paths if p.lower().endswith('.basis')]
+    mats    = [p for p in paths if p.lower().endswith('.mat')]
+    singles = []
+    for p in mats:
+        if _mat_variables(p) & WHOLE_SET_VARIABLES:
+            groups.append([p])
+        else:
+            singles.append(p)
+    if singles:
+        groups.append(sorted(singles))
+    if len(groups) < 2:
+        return None
+
+    sets = []
+    for files in groups:
+        found = detect_format(files)
+        if found['status'] == 'failed':
+            continue
+        sets.append(dict(found, name=_set_name(files), files=files))
+    if len(sets) < 2:
+        return None
+    sets.sort(key=lambda s: s['name'].lower())
+
+    listed = '; '.join(f"{s['name']} ({s['format']}, "
+                       f"{len(s['data'].get('names') or [])} metabolites)" for s in sets)
+    return {
+        'status':           'several',
+        'format':           'Several basis sets',
+        'ambiguous_options': [],
+        'sets':             sets,
+        'data':             {},
+        'missing':          [],
+        'message':          f"These files hold {len(sets)} basis sets: {listed}. "
+                            f"Pick the one to convert.",
+    }
 
 
 ############## Detectors — each reads one file for real metadata #############

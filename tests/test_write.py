@@ -83,6 +83,53 @@ def test_mrscloud_files_are_read_as_mrscloud_saves_them():
     assert (basis[0]['name'], basis[0]['sw'], basis[0]['sf']) == ('Ace', 4000.0, 123.04753)
 
 
+def _folder(*parts):
+    folder = os.path.join(SAMPLES, *parts)
+    return [os.path.join(folder, f) for f in os.listdir(folder) if not f.startswith('.')]
+
+
+def test_a_folder_holding_two_lcmodel_basis_files_names_both_and_each_loads():
+    found = detect_format(_folder('LCModel', 'BASIS_file'))
+
+    assert found['status'] == 'several' and found['compatible_tools'] == []
+    sets = {s['name']: s for s in found['sets']}
+    assert list(sets) == ['LCModel_Siemens_UnEdited_sLASER_105_.BASIS', 'SLASER_Siemens26.basis']
+    for name, n, te in (('LCModel_Siemens_UnEdited_sLASER_105_.BASIS', 25, 105.0),
+                        ('SLASER_Siemens26.basis', 22, 26.0)):
+        picked = sets[name]
+        assert [os.path.basename(f) for f in picked['files']] == [name]
+        assert picked['format'] == 'LCModel .BASIS' and 'LCModel' in picked['compatible_tools']
+        basis = load_basis(picked['files'], picked['format'])
+        assert len(basis) == len(picked['data']['names']) == n and basis[0]['te'] == te
+    assert 'LCModel_Siemens_UnEdited_sLASER_105_.BASIS (LCModel .BASIS, 25 metabolites)' in found['message']
+
+
+def test_mrscloud_singles_beside_their_combined_basis_are_two_sets_however_picked():
+    """Browse folder lists the files in the folder's order, Browse files sorted: both are two sets."""
+    files = _folder('MRSCLOUD')
+    for picked_as in (files, sorted(files)):
+        found = detect_format(picked_as)
+        assert found['status'] == 'several'
+        sets = {s['name']: s for s in found['sets']}
+        assert list(sets) == ['BASIS_Siemens_UnEdited_sLASER_105_wMM.mat', 'Siemens_UnEdited_sLASER_TE105_*.mat']
+
+        combined, singles = sets.values()
+        assert combined['format'] == 'Osprey .mat' and singles['format'] == 'MRSCloud .mat'
+        assert len(singles['files']) == 25 and all(os.path.basename(f).startswith('Siemens_')
+                                                   for f in singles['files'])
+        assert len(load_basis(singles['files'], singles['format'])) == 25
+        assert len(load_basis(combined['files'], combined['format'])) == len(combined['data']['names'])
+
+
+def test_a_folder_holding_one_set_is_detected_as_before():
+    singles = [f for f in _folder('MRSCLOUD') if os.path.basename(f).startswith('Siemens_')]
+    for files, fmt in ((_folder('MARSS', 'basis_functions_metab_mm_mat'), 'MARSS .mat'),
+                       (_folder('FIDA'), 'FID-A .mat'), (_folder('OSPREY'), 'Osprey .mat'),
+                       (singles, 'MRSCloud .mat'), (_folder('LCModel', 'BASIS_file')[:1], 'LCModel .BASIS')):
+        found = detect_format(files)
+        assert (found['status'], found['format'], 'sets' in found) == ('full', fmt, False)
+
+
 def test_a_basis_stating_no_linewidth_is_written_with_the_default(tmp_path):
     """FSL-MRS states the linewidth as null when it has none; every writer takes its default."""
     files = [os.path.join(SAMPLES, 'FSL-MRS', name) for name in ('NAA.json', 'Cr391.json')]
