@@ -2,16 +2,30 @@
 writers/write_vespa.py
 Basis Set Converter — VeSPA Analysis writer
 
-Generates a VeSPA Analysis prior XML file. Literature chemical shifts
-from metabList.mat (Omega field) say where to look for each line.
+Generates a VeSPA Analysis prior XML file whose lines rebuild the basis set.
 
-This matches the approach used in marss_to_vespa_basis.xml:
-- Use metabList.mat Omega values as initial PPM locations
-- The line is the FFT peak within 0.05 ppm of each: its ppm, its relative
-  area and its phase from the complex spectrum
-- Shifts that land on the same FFT peak give one line, not one each
+VeSPA builds each metabolite's basis FID from its prior lines (common/mrs_prior.py,
+Prior.calculate_full_basis_set) with common/util/generic_spectral.py create_fid: every line
+is an undamped complex exponential,
 
-VeSPA prior format (confirmed from marss_to_vespa_basis.xml):
+    area * exp(1j * phase * pi / 180) * exp(1j * 2 pi * ppm2hz(ppm) * t),
+    ppm2hz(ppm) = sw / 2 - frequency * (ppm - resppm)            (analysis/mrs_dataset.py),
+
+area the amplitude at t = 0, phase in degrees, ppm absolute; the fit adds the lineshape. The
+sw / 2 is VeSPA's chop, (-1)**k; the rest runs opposite to a basis' own convention, where a
+line at ppm is at +sf * (ppm - centre) Hz (writers/centre.py): VeSPA's FID is the complex
+conjugate of BasiC's. So a line BasiC holds as c * exp(2 pi i f t) is written at
+ppm = centre + f / sf, area |c| and phase -angle(c) in degrees; rebuilt by create_fid it is
+the chopped conjugate of the BasiC line, the same spectrum on VeSPA's ppm axis.
+VeSPA-Simulation does the same: its prior lines are at -Fr ppm with phase -angle(I)
+(common/resources/pulse_sequences.xml:366, 373).
+
+The lines are each metabolite's FID decomposed into decaying exponentials (writers/lines.py,
+HLSVD); their dampings are not written. The areas keep the source's scale for every
+metabolite (no normalisation), so fitted areas compare between metabolites as the source's
+FIDs do.
+
+VeSPA prior format:
     <vespa_export version="1.0.0">
       <prior version="1.0.0">
         <nucleus>1H</nucleus>
@@ -19,16 +33,19 @@ VeSPA prior format (confirmed from marss_to_vespa_basis.xml):
         <prior_metabolite version="1.0.0">
           <name>NAA</name>
           <dim>0</dim><dim>0</dim><dim>0</dim>
-          <spins>N</spins>
+          <spins>5</spins>           ← the spins metabList lists (else the lines)
           <line>
             <group/>
-            <ppm>2.004</ppm>    ← FFT peak near metabList Omega 2.008
-            <area>1.0</area>    ← normalized, dominant=1.0
-            <phase>...</phase>  ← from FFT at that ppm
+            <ppm>2.00799997</ppm>   ← the line's frequency, absolute ppm
+            <area>29.61939194</area> ← its amplitude at t = 0, the source's scale
+            <phase>3.216372</phase>  ← -(its phase), degrees (jMRUI sample's NAA CH3)
           </line>
         </prior_metabolite>
       </prior>
     </vespa_export>
+
+The literature table and the peak helpers below are no longer used for VeSPA's lines; the
+GAVA, MIDAS and OXSA writers import them, and VeSPA uses the table for spins only.
 """
 
 import os
@@ -38,10 +55,13 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import scipy.io as sio
 
-from writers.centre import at_centre
+from writers.centre import CENTRE, at_centre
+from writers.lines import MAX_ORDER, TOL, decompose
 
 
 ############## Literature chemical shift table (from metabList.mat) #############
+# One entry per spin of metabList's spin system (a methyl is one). write_vespa counts them
+# for <spins>; write_gava, write_midas and write_oxsa look for peaks at them.
 # Loaded dynamically from metabList.mat if available, otherwise uses hardcoded
 # values from the working marss_to_vespa_basis.xml
 
@@ -99,17 +119,18 @@ def write_vespa(basis_list, outpath,
     outpath        : str, full path for output .xml file
     seqte          : float, echo time in ms
     source         : str, source description
-    metablist_path : str or None, path to metabList.mat for literature shifts
+    metablist_path : str or None, path to metabList.mat (its numberOfProtons give <spins>)
     """
-    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
+    basis_list = at_centre(basis_list)     # the lines' ppm are read at CENTRE
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 
     if not basis_list:
         raise RuntimeError("basis_list is empty")
 
-    # Load metabList.mat if provided
     ppm_table = _load_metablist(metablist_path) if metablist_path else METAB_PPM_TABLE
+    counted = 'numberOfProtons summed from metabList.mat' if metablist_path else \
+              "the spins metabList's table lists (one per shift, a methyl as one)"
 
     timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
@@ -121,55 +142,61 @@ def write_vespa(basis_list, outpath,
     prior = ET.SubElement(root, 'prior', version='1.0.0')
     ET.SubElement(prior, 'source').text    = source
     ET.SubElement(prior, 'source_id').text = 'basis_set_converter'
-    ET.SubElement(prior, 'comment').text   = \
-        f'Prior information from basis set with {len(basis_list)} metabolites. ' \
-        f'PPM, areas and phases of the FFT peaks nearest the literature shifts ' \
-        f'(metabList), each peak once.'
+    comment = ET.SubElement(prior, 'comment')
     ET.SubElement(prior, 'nucleus').text   = '1H'
     ET.SubElement(prior, 'seqte').text     = str(float(seqte))
 
+    listed, unlisted, missed = [], [], []
     for core in basis_list:
         met_name = core.get('name', 'unknown')
         fid      = np.asarray(core['fid']).ravel()
         sf       = float(core.get('sf') or 123.26)
         sw       = float(core.get('sw') or 4000.0)
 
-        # Get literature PPM positions for this metabolite
-        lit_ppms = _get_lit_ppms(met_name, ppm_table)
-
-        # MARSS states a ppmCalib of 4.675, but its sets are at 4.65 (NAA at 2.008 there)
-        ppm_calib = PPM_CALIB
-
-        # Get areas and phases at those PPM positions from FFT
-        peaks = _peaks_at_ppms(fid, sf, sw, lit_ppms, ppm_calib=ppm_calib)
-
-        if not peaks:
-            print(f"  WARNING: no peaks for {met_name} — skipping")
+        lines = decompose(fid, sw)
+        keep  = np.abs(lines['amplitude']) > 0
+        amp, freq = lines['amplitude'][keep], lines['freq'][keep]
+        if not len(amp):
+            print(f"  WARNING: no lines for {met_name} — skipping")
+            continue
+        if lines['residual'] > TOL:
+            # its best lines do not rebuild it: written undamped, they would be another shape
+            print(f"  WARNING: no {MAX_ORDER} lines rebuild {met_name} to {TOL:g} "
+                  f"(residual {lines['residual']:.1e}) — left out")
+            missed.append(met_name)
             continue
 
-        # Normalize: dominant peak area = 1.0
-        max_area = max(a for _, a, _ in peaks)
-        if max_area > 0:
-            peaks = [(p, round(a / max_area, 12), ph) for p, a, ph in peaks]
+        lit = _get_lit_ppms(met_name, ppm_table)
+        spins = int(round(sum(n for _, n in lit))) if lit else len(amp)
+        (listed if lit else unlisted).append(met_name)
 
         met_elem = ET.SubElement(prior, 'prior_metabolite', version='1.0.0')
         ET.SubElement(met_elem, 'name').text  = met_name
         ET.SubElement(met_elem, 'dim').text   = '0'
         ET.SubElement(met_elem, 'dim').text   = '0'
         ET.SubElement(met_elem, 'dim').text   = '0'
-        ET.SubElement(met_elem, 'spins').text = str(len(peaks))
+        ET.SubElement(met_elem, 'spins').text = str(spins)
 
-        for ppm, area, phase in peaks:
+        for c, f in zip(amp, freq):
             line = ET.SubElement(met_elem, 'line')
             ET.SubElement(line, 'group')
-            ET.SubElement(line, 'ppm').text   = f'{ppm:.6f}'
-            ET.SubElement(line, 'area').text  = f'{area}'
-            ET.SubElement(line, 'phase').text = f'{phase:.6f}'
+            ET.SubElement(line, 'ppm').text   = f'{CENTRE + f / sf:.8f}'
+            ET.SubElement(line, 'area').text  = f'{abs(c):.10g}'
+            ET.SubElement(line, 'phase').text = f'{-np.degrees(np.angle(c)):.6f}'
 
-        dom_ppm = peaks[0][0]
-        src = 'lit' if lit_ppms else 'fft'
-        print(f"  {met_name:15s}  {len(peaks):2d} peaks  "
-              f"dominant={dom_ppm:.4f} ppm  [{src}]")
+        print(f"  {met_name:15s}  {len(amp):3d} lines  "
+              f"largest={CENTRE + freq[0] / sf:.4f} ppm  residual={lines['residual']:.1e}")
+
+    comment.text = (
+        f'Prior information from basis set with {len(basis_list)} metabolites. '
+        f'Lines: each FID decomposed into decaying exponentials (HLSVD), the fewest that '
+        f'rebuild it to a relative residual of {TOL:g}; ppm, amplitude at t = 0 and phase '
+        f'of each, its damping left to the fit. Areas in the source\'s scale, the same for '
+        f'every metabolite (factor 1). Phases in VeSPA\'s sign (the conjugate FID). '
+        f'Spins: {counted}' + (f' for {", ".join(listed)}' if unlisted and listed else '') +
+        (f'; the number of lines for {", ".join(unlisted)}' if unlisted else '') + '.' +
+        (f' Left out, as no {MAX_ORDER} lines rebuild them to {TOL:g}: {", ".join(missed)}.'
+         if missed else ''))
 
     # Write XML
     xml_str = minidom.parseString(
@@ -183,7 +210,7 @@ def write_vespa(basis_list, outpath,
     print(f"  {len(basis_list)} metabolites  TE={seqte} ms")
 
 
-############## Helpers #############
+############## Helpers (the GAVA, MIDAS and OXSA writers import these) #############
 
 def _load_metablist(path):
     """Load PPM table from metabList.mat — returns dict of name → [(ppm, n_protons), ...]"""

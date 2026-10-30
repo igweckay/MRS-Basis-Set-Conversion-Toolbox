@@ -272,23 +272,124 @@ def test_vespa_priors_are_read_back(tmp_path):
     assert sorted(b['name'] for b in load_basis(written, found['format'])) == ['Cr391', 'NAA']
 
 
-def test_vespa_priors_list_each_line_once(tmp_path):
-    """VeSPA adds up every line of a prior metabolite: literature shifts that land on the same
-    spectral peak (choline's 4.054 twice, lactate's 1.314 three times) are written as one line."""
-    import xml.etree.ElementTree as ET
-    folder = os.path.join(SAMPLES, 'JMRUI')
-    basis = load_basis([os.path.join(folder, f) for f in sorted(os.listdir(folder))], 'jMRUI .txt')
-    path = write_basis(basis, 'vespa_analysis', 'default', str(tmp_path))[0]
-    prior = ET.parse(path).getroot().find('prior')
-    lines = {m.findtext('name'): [(float(l.findtext('ppm')), float(l.findtext('area')))
-                                  for l in m.findall('line')] for m in prior.findall('prior_metabolite')}
+_VESPA = {}
 
-    assert len(lines) == 23
+
+def _vespa_jmrui():
+    """The 23 jMRUI sample functions, and the VeSPA prior written for them (once: it takes a while)."""
+    import tempfile
+    if not _VESPA:
+        folder = os.path.join(SAMPLES, 'JMRUI')
+        basis = load_basis([os.path.join(folder, f) for f in sorted(os.listdir(folder))], 'jMRUI .txt')
+        _VESPA['basis'] = basis
+        _VESPA['path'] = write_basis(basis, 'vespa_analysis', 'default', tempfile.mkdtemp())[0]
+    return _VESPA['basis'], _VESPA['path']
+
+
+def _vespa_lines(path):
+    """Each prior metabolite's lines as (ppm, area, phase) arrays, its spins, and the prior's comment."""
+    import numpy as np
+    import xml.etree.ElementTree as ET
+    prior = ET.parse(path).getroot().find('prior')
+    lines = {m.findtext('name'): np.array([[float(l.findtext(k)) for k in ('ppm', 'area', 'phase')]
+                                           for l in m.findall('line')])
+             for m in prior.findall('prior_metabolite')}
+    spins = {m.findtext('name'): int(m.findtext('spins')) for m in prior.findall('prior_metabolite')}
+    return lines, spins, prior.findtext('comment')
+
+
+def test_vespa_priors_list_each_line_once():
+    """VeSPA adds up every line of a prior metabolite: no line is written twice."""
+    _, path = _vespa_jmrui()
+    lines, _, comment = _vespa_lines(path)
+
+    assert len(lines) == 22
     for name, found in lines.items():
-        ppms = [ppm for ppm, _ in found]
+        ppms = list(found[:, 0])
         assert len(ppms) == len(set(ppms)), (name, ppms)
-    assert 2.00 <= max(lines['NAA'], key=lambda x: x[1])[0] <= 2.01
-    assert 'PPM from literature' not in prior.findtext('comment')
+    naa = lines['NAA']
+    assert 2.00 <= naa[naa[:, 1].argmax(), 0] <= 2.01
+    assert 'PPM from literature' not in comment
+
+
+def _vespa_fid(lines, damping, n, sw, sf, centre=4.65):
+    """VeSPA's create_fid (common/util/generic_spectral.py) for prior lines (ppm, area, phase), at a
+    dataset of n points, sw Hz, sf MHz and resppm `centre`, each line damped by `damping` (1/s)."""
+    import numpy as np
+    t = np.arange(n)[:, None] / sw
+    hz = sw / 2 - sf * (lines[:, 0] - centre)                            # mrs_dataset.ppm2hz
+    return (lines[:, 1] * np.exp(1j * np.radians(lines[:, 2]))
+            * np.exp(1j * 2 * np.pi * hz * t) * np.exp(-damping * t)).sum(axis=1)
+
+
+def _as_vespa_holds(fid):
+    """A basis FID as VeSPA holds the same spectrum: conjugated (its ppm axis runs the other way)
+    and chopped (ppm2hz's sw / 2)."""
+    import numpy as np
+    return np.conj(fid) * (-1.0) ** np.arange(len(fid))
+
+
+def test_vespa_lines_are_the_lines_the_fid_holds(tmp_path):
+    """A FID of known lines (a singlet, a doublet, a line with a phase, each with its own damping)
+    is written line for line: its ppm, its amplitude at t = 0 and its phase in VeSPA's sign, the
+    negative of BasiC's (VeSPA's FID is BasiC's conjugate). A copy with its first point halved,
+    as FID-A's sets hold it, gives the same lines: they are fitted from the second point on.
+    Each metabolite keeps its own scale."""
+    import numpy as np
+    sw, sf, n = 4000.0, 123.2618, 2048
+    known = np.array([[3.027, 3.0, 0.0, 2.0],                           # ppm, area, phase, lw (Hz)
+                      [1.31 + 3.45 / sf, 1.5, 0.0, 3.0],
+                      [1.31 - 3.45 / sf, 1.5, 0.0, 3.0],
+                      [3.913, 0.7, 40.0, 5.0]])
+    t = np.arange(n)[:, None] / sw
+    fid = (known[:, 1] * np.exp(1j * np.radians(known[:, 2])) * np.exp(-np.pi * known[:, 3] * t)
+           * np.exp(2j * np.pi * (known[:, 0] - 4.65) * sf * t)).sum(axis=1)
+    halved = fid.copy()
+    halved[0] /= 2
+    basis = [{'name': 'Known', 'fid': fid, 'sw': sw, 'sf': sf, 'n': n},
+             {'name': 'Halved', 'fid': 2 * halved, 'sw': sw, 'sf': sf, 'n': n}]
+    lines, spins, _ = _vespa_lines(write_basis(basis, 'vespa_analysis', 'default', str(tmp_path))[0])
+
+    for name, scale in (('Known', 1.0), ('Halved', 2.0)):
+        got = lines[name][np.argsort(lines[name][:, 0])]
+        want = known[np.argsort(known[:, 0])]
+        assert len(got) == 4 and spins[name] == 4, (name, got)
+        assert np.allclose(got[:, 0], want[:, 0], atol=0.001), name
+        assert np.allclose(got[:, 1], scale * want[:, 1], rtol=0.001), name
+        assert np.allclose(got[:, 2], -want[:, 2], atol=0.5), name
+
+
+def test_vespa_lines_rebuild_each_jmrui_function():
+    """VeSPA's create_fid formula, given the written lines and the damping the decomposition found
+    for each, gives back each jMRUI sample function as VeSPA holds it, to the writer's criterion
+    (twice TOL: the ppm, areas and phases are written rounded). MM, a broad hump, is the one no
+    MAX_ORDER lines rebuild: it is left out, and the prior says so. NAA's lines add up to NAA's
+    FID at t = 0 as creatine's add up to creatine's: one scale for the whole set."""
+    import numpy as np
+    from writers.centre import at_centre
+    from writers.lines import TOL, decompose
+    basis, path = _vespa_jmrui()
+    lines, spins, comment = _vespa_lines(path)
+
+    assert set(lines) == {b['name'] for b in basis} - {'MM'}
+    assert comment.rstrip('.').endswith(f'rebuild them to {TOL:g}: MM')
+    residual = {}
+    for core in at_centre(basis):
+        if core['name'] == 'MM':
+            continue
+        fid, sw, sf = core['fid'], core['sw'], core['sf']
+        damping = decompose(fid, sw)['damping']
+        rebuilt = _vespa_fid(lines[core['name']], damping, len(fid), sw, sf)
+        held = _as_vespa_holds(fid)
+        residual[core['name']] = np.linalg.norm((rebuilt - held)[1:]) / np.linalg.norm(held[1:])
+    assert max(residual.values()) <= 2 * TOL, residual
+
+    def at_zero(name):
+        found = lines[name]
+        return np.sum(found[:, 1] * np.exp(-1j * np.radians(found[:, 2])))
+    fids = {b['name']: b['fid'] for b in basis}
+    assert abs(at_zero('NAA') / at_zero('CrNo391') / (fids['NAA'][0] / fids['CrNo391'][0]) - 1) < 1e-3
+    assert spins['NAA'] == 5 and spins['Cho'] == 5
 
 
 def _oxsa_ppm(path):
