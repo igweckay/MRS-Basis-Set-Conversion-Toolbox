@@ -225,6 +225,25 @@ def test_vespa_priors_are_read_back(tmp_path):
     assert sorted(b['name'] for b in load_basis(written, found['format'])) == ['Cr391', 'NAA']
 
 
+def test_vespa_priors_list_each_line_once(tmp_path):
+    """VeSPA adds up every line of a prior metabolite: literature shifts that land on the same
+    spectral peak (choline's 4.054 twice, lactate's 1.314 three times) are written as one line."""
+    import xml.etree.ElementTree as ET
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f) for f in sorted(os.listdir(folder))], 'jMRUI .txt')
+    path = write_basis(basis, 'vespa_analysis', 'default', str(tmp_path))[0]
+    prior = ET.parse(path).getroot().find('prior')
+    lines = {m.findtext('name'): [(float(l.findtext('ppm')), float(l.findtext('area')))
+                                  for l in m.findall('line')] for m in prior.findall('prior_metabolite')}
+
+    assert len(lines) == 23
+    for name, found in lines.items():
+        ppms = [ppm for ppm, _ in found]
+        assert len(ppms) == len(set(ppms)), (name, ppms)
+    assert 2.00 <= max(lines['NAA'], key=lambda x: x[1])[0] <= 2.01
+    assert 'PPM from literature' not in prior.findtext('comment')
+
+
 def _oxsa_ppm(path):
     """Each OXSA component's expected ppm, by metabolite."""
     import re

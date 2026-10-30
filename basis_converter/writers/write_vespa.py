@@ -2,13 +2,14 @@
 writers/write_vespa.py
 Basis Set Converter — VeSPA Analysis writer
 
-Generates a VeSPA Analysis prior XML file using literature chemical
-shift values from metabList.mat (Omega field) as peak PPM locations.
+Generates a VeSPA Analysis prior XML file. Literature chemical shifts
+from metabList.mat (Omega field) say where to look for each line.
 
 This matches the approach used in marss_to_vespa_basis.xml:
 - Use metabList.mat Omega values as initial PPM locations
-- Relative areas estimated from FFT spectrum at those PPM positions
-- Phase estimated from complex spectrum at each peak
+- The line is the FFT peak within 0.05 ppm of each: its ppm, its relative
+  area and its phase from the complex spectrum
+- Shifts that land on the same FFT peak give one line, not one each
 
 VeSPA prior format (confirmed from marss_to_vespa_basis.xml):
     <vespa_export version="1.0.0">
@@ -21,7 +22,7 @@ VeSPA prior format (confirmed from marss_to_vespa_basis.xml):
           <spins>N</spins>
           <line>
             <group/>
-            <ppm>2.008</ppm>    ← from metabList Omega
+            <ppm>2.004</ppm>    ← FFT peak near metabList Omega 2.008
             <area>1.0</area>    ← normalized, dominant=1.0
             <phase>...</phase>  ← from FFT at that ppm
           </line>
@@ -122,7 +123,8 @@ def write_vespa(basis_list, outpath,
     ET.SubElement(prior, 'source_id').text = 'basis_set_converter'
     ET.SubElement(prior, 'comment').text   = \
         f'Prior information from basis set with {len(basis_list)} metabolites. ' \
-        f'PPM from literature (metabList), areas/phases from FFT.'
+        f'PPM, areas and phases of the FFT peaks nearest the literature shifts ' \
+        f'(metabList), each peak once.'
     ET.SubElement(prior, 'nucleus').text   = '1H'
     ET.SubElement(prior, 'seqte').text     = str(float(seqte))
 
@@ -349,7 +351,11 @@ def _peaks_at_ppms(fid, sf, sw, lit_lines, ppm_calib=PPM_CALIB):
                 ph      = float(np.degrees(np.angle(spec_phased[idx])))
                 ppm_loc = float(ppm[idx])
 
-            # Keep the peak even if area is small — preserve TE modulation
+            # Keep the peak even if area is small — preserve TE modulation.
+            # Shifts that land on a peak already listed are that peak again:
+            # VeSPA adds up every line, so it is listed once, with its area once.
+            if any(p_in == round(ppm_loc, 6) for p_in, _, _ in peaks):
+                continue
             peaks.append((round(ppm_loc, 6), area, round(ph, 6)))
 
         # Normalize to dominant peak = 1.0 using absolute areas
