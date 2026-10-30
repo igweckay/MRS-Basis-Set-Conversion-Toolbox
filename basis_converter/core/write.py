@@ -142,7 +142,9 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=
     if tool_id in ('vespa_analysis', 'vespa_gen2'):
         from writers.write_vespa import write_vespa
         out_file = os.path.join(outdir, 'vespa_priors.xml')
-        write_vespa(basis_list, out_file)
+        # the echo time the functions state, else the one given
+        stated = next((float(b['te']) for b in basis_list if b.get('te')), None)
+        write_vespa(basis_list, out_file, seqte=stated or te)
         return [out_file]
 
     if tool_id in ('jet', 'spinwizard'):

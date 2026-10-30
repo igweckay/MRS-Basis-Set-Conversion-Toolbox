@@ -303,7 +303,7 @@ def test_vespa_priors_list_each_line_once():
     _, path = _vespa_jmrui()
     lines, _, comment = _vespa_lines(path)
 
-    assert len(lines) == 22
+    assert len(lines) == 21
     for name, found in lines.items():
         ppms = list(found[:, 0])
         assert len(ppms) == len(set(ppms)), (name, ppms)
@@ -312,14 +312,14 @@ def test_vespa_priors_list_each_line_once():
     assert 'PPM from literature' not in comment
 
 
-def _vespa_fid(lines, damping, n, sw, sf, centre=4.65):
+def _vespa_fid(lines, n, sw, sf, shape=lambda t: 1.0, centre=4.65):
     """VeSPA's create_fid (common/util/generic_spectral.py) for prior lines (ppm, area, phase), at a
-    dataset of n points, sw Hz, sf MHz and resppm `centre`, each line damped by `damping` (1/s)."""
+    dataset of n points, sw Hz, sf MHz and resppm `centre`, times a lineshape shape(t)."""
     import numpy as np
     t = np.arange(n)[:, None] / sw
     hz = sw / 2 - sf * (lines[:, 0] - centre)                            # mrs_dataset.ppm2hz
     return (lines[:, 1] * np.exp(1j * np.radians(lines[:, 2]))
-            * np.exp(1j * 2 * np.pi * hz * t) * np.exp(-damping * t)).sum(axis=1)
+            * np.exp(1j * 2 * np.pi * hz * t)).sum(axis=1) * shape(t[:, 0])
 
 
 def _as_vespa_holds(fid):
@@ -330,26 +330,36 @@ def _as_vespa_holds(fid):
 
 
 def test_vespa_lines_are_the_lines_the_fid_holds(tmp_path):
-    """A FID of known lines (a singlet, a doublet, a line with a phase, each with its own damping)
-    is written line for line: its ppm, its amplitude at t = 0 and its phase in VeSPA's sign, the
-    negative of BasiC's (VeSPA's FID is BasiC's conjugate). A copy with its first point halved,
-    as FID-A's sets hold it, gives the same lines: they are fitted from the second point on.
-    Each metabolite keeps its own scale."""
+    """A set whose lines share a Voigt lineshape (2 Hz Lorentzian, 3 Hz Gaussian), as glycine's
+    singlet shows it: a function of known lines (a singlet, a doublet, a line with a phase) is
+    written line for line, undamped, at its ppm, its amplitude at t = 0 and its phase in VeSPA's
+    sign (VeSPA's FID is BasiC's conjugate). A copy with its first point halved, as FID-A's sets
+    hold it, gives the same lines at its own scale. A 30 Hz hump is no lines of that lineshape:
+    it is left out, and the prior says so and states the lineshape. The echo time given is the
+    prior's."""
     import numpy as np
     sw, sf, n = 4000.0, 123.2618, 2048
-    known = np.array([[3.027, 3.0, 0.0, 2.0],                           # ppm, area, phase, lw (Hz)
-                      [1.31 + 3.45 / sf, 1.5, 0.0, 3.0],
-                      [1.31 - 3.45 / sf, 1.5, 0.0, 3.0],
-                      [3.913, 0.7, 40.0, 5.0]])
-    t = np.arange(n)[:, None] / sw
-    fid = (known[:, 1] * np.exp(1j * np.radians(known[:, 2])) * np.exp(-np.pi * known[:, 3] * t)
-           * np.exp(2j * np.pi * (known[:, 0] - 4.65) * sf * t)).sum(axis=1)
-    halved = fid.copy()
-    halved[0] /= 2
-    basis = [{'name': 'Known', 'fid': fid, 'sw': sw, 'sf': sf, 'n': n},
-             {'name': 'Halved', 'fid': 2 * halved, 'sw': sw, 'sf': sf, 'n': n}]
-    lines, spins, _ = _vespa_lines(write_basis(basis, 'vespa_analysis', 'default', str(tmp_path))[0])
+    t = np.arange(n) / sw
+    voigt = np.exp(-np.pi * 2.0 * t - (np.pi * 3.0 * t) ** 2 / (4 * np.log(2)))
 
+    def fid(lines):                                                      # ppm, area, phase
+        return voigt * (lines[:, 1] * np.exp(1j * np.radians(lines[:, 2]))
+                        * np.exp(2j * np.pi * np.outer(t, (lines[:, 0] - 4.65) * sf))).sum(axis=1)
+    known = np.array([[3.027, 3.0, 0.0],
+                      [1.31 + 3.45 / sf, 1.5, 0.0],
+                      [1.31 - 3.45 / sf, 1.5, 0.0],
+                      [3.913, 0.7, 40.0]])
+    halved = 2 * fid(known)
+    halved[0] /= 2
+    hump = 5.0 * np.exp(-np.pi * 30.0 * t + 2j * np.pi * (0.9 - 4.65) * sf * t)
+    basis = [{'name': name, 'fid': f, 'sw': sw, 'sf': sf, 'n': n} for name, f in
+             (('Gly', fid(np.array([[3.548, 2.0, 0.0]]))), ('Known', fid(known)),
+              ('Halved', halved), ('Hump', hump))]
+    path = write_basis(basis, 'vespa_analysis', 'default', str(tmp_path), te=35.0)[0]
+    lines, spins, comment = _vespa_lines(path)
+
+    assert set(lines) == {'Gly', 'Known', 'Halved'}
+    assert 'Voigt 2.000 Hz Lorentzian, 3.000 Hz Gaussian' in comment and 'Hump' in comment
     for name, scale in (('Known', 1.0), ('Halved', 2.0)):
         got = lines[name][np.argsort(lines[name][:, 0])]
         want = known[np.argsort(known[:, 0])]
@@ -357,32 +367,41 @@ def test_vespa_lines_are_the_lines_the_fid_holds(tmp_path):
         assert np.allclose(got[:, 0], want[:, 0], atol=0.001), name
         assert np.allclose(got[:, 1], scale * want[:, 1], rtol=0.001), name
         assert np.allclose(got[:, 2], -want[:, 2], atol=0.5), name
+    import xml.etree.ElementTree as ET
+    assert float(ET.parse(path).getroot().find('prior').findtext('seqte')) == 35.0
 
 
 def test_vespa_lines_rebuild_each_jmrui_function():
-    """VeSPA's create_fid formula, given the written lines and the damping the decomposition found
-    for each, gives back each jMRUI sample function as VeSPA holds it, to the writer's criterion
-    (twice TOL: the ppm, areas and phases are written rounded). MM, a broad hump, is the one no
-    MAX_ORDER lines rebuild: it is left out, and the prior says so. NAA's lines add up to NAA's
-    FID at t = 0 as creatine's add up to creatine's: one scale for the whole set."""
+    """The jMRUI sample's lines share a 1 Hz Lorentzian (its singlets show it). VeSPA's create_fid
+    formula, given the written lines and times that lineshape, as VeSPA's fit applies one
+    lineshape to all of a metabolite's lines, gives back each function as VeSPA holds it, to the
+    writer's criterion (with 10 % for the ppm, areas and phases written rounded, which move the
+    residual by about 2e-6). The lines do not cancel each other: their areas add up to at most
+    twice the FID at t = 0. MM, a broad hump, and MM09, a 10 Hz singlet, hold no line of the
+    set's lineshape: they are left out, and the prior says so and points to VeSPA's own
+    macromolecule model. NAA's lines add up to NAA's FID at t = 0 as creatine's add up to
+    creatine's: one scale for the whole set."""
     import numpy as np
     from writers.centre import at_centre
-    from writers.lines import TOL, decompose
+    from writers.lines import TOL
     basis, path = _vespa_jmrui()
     lines, spins, comment = _vespa_lines(path)
 
-    assert set(lines) == {b['name'] for b in basis} - {'MM'}
-    assert comment.rstrip('.').endswith(f'rebuild them to {TOL:g}: MM')
-    residual = {}
+    assert set(lines) == {b['name'] for b in basis} - {'MM', 'MM09'}
+    assert 'Lorentzian 1.000 Hz' in comment
+    assert comment.rstrip().endswith('analysis/constants.py:548).') and ': MM, MM09.' in comment
+    residual, cancel = {}, {}
     for core in at_centre(basis):
-        if core['name'] == 'MM':
+        name = core['name']
+        if name in ('MM', 'MM09'):
             continue
         fid, sw, sf = core['fid'], core['sw'], core['sf']
-        damping = decompose(fid, sw)['damping']
-        rebuilt = _vespa_fid(lines[core['name']], damping, len(fid), sw, sf)
+        rebuilt = _vespa_fid(lines[name], len(fid), sw, sf, lambda t: np.exp(-np.pi * 1.0 * t))
         held = _as_vespa_holds(fid)
-        residual[core['name']] = np.linalg.norm((rebuilt - held)[1:]) / np.linalg.norm(held[1:])
-    assert max(residual.values()) <= 2 * TOL, residual
+        residual[name] = np.linalg.norm((rebuilt - held)[1:]) / np.linalg.norm(held[1:])
+        cancel[name] = lines[name][:, 1].sum() / abs(fid[0])
+    assert max(residual.values()) <= 1.1 * TOL, residual
+    assert max(cancel.values()) <= 2, cancel
 
     def at_zero(name):
         found = lines[name]

@@ -20,10 +20,19 @@ the chopped conjugate of the BasiC line, the same spectrum on VeSPA's ppm axis.
 VeSPA-Simulation does the same: its prior lines are at -Fr ppm with phase -angle(I)
 (common/resources/pulse_sequences.xml:366, 373).
 
-The lines are each metabolite's FID decomposed into decaying exponentials (writers/lines.py,
-HLSVD); their dampings are not written. The areas keep the source's scale for every
-metabolite (no normalisation), so fitted areas compare between metabolites as the source's
-FIDs do.
+So the lines are fitted as VeSPA rebuilds them (writers/lines.py, fit_lines): each
+metabolite's FID as undamped lines times the set's own lineshape, measured on its singlets
+(a 1 Hz Lorentzian in the jMRUI, LCModel TE 26, Osprey and MRSCloud samples), judged by how
+well that rebuilds the FID. The lineshape is not in the lines: VeSPA's fitted lineshape is the
+data's whole lineshape, not a broadening of the basis'. Lines fitted with their own dampings
+(HLSVD) and written without them were another shape: the 0.512 s MARSS-derived sets hold
+strongly coupled multiplets as components 2-13 Hz wide, and VeSPA drew them sharp (glucose
+78 % off). A function with no line of the set's
+lineshape (the samples' macromolecules and lipids, broad humps; MM09's 10 Hz singlet) is left
+out and named in the prior's comment, which points to VeSPA's own macromolecule model. The
+areas keep the source's scale for every metabolite (no normalisation), so fitted areas compare
+between metabolites as the source's FIDs do. seqte is the echo time the set states (or the one
+given to core.write).
 
 VeSPA prior format:
     <vespa_export version="1.0.0">
@@ -37,7 +46,7 @@ VeSPA prior format:
           <line>
             <group/>
             <ppm>2.00799997</ppm>   ← the line's frequency, absolute ppm
-            <area>29.61939194</area> ← its amplitude at t = 0, the source's scale
+            <area>29.61939201</area> ← its amplitude at t = 0, the source's scale
             <phase>3.216372</phase>  ← -(its phase), degrees (jMRUI sample's NAA CH3)
           </line>
         </prior_metabolite>
@@ -56,7 +65,8 @@ from xml.dom import minidom
 import scipy.io as sio
 
 from writers.centre import CENTRE, at_centre
-from writers.lines import MAX_ORDER, TOL, decompose
+from writers.lines import (MAX_LINES, TOL, decompose, fit_lines, fwhm, is_hump,
+                           set_lineshape)
 
 
 ############## Literature chemical shift table (from metabList.mat) #############
@@ -146,25 +156,31 @@ def write_vespa(basis_list, outpath,
     ET.SubElement(prior, 'nucleus').text   = '1H'
     ET.SubElement(prior, 'seqte').text     = str(float(seqte))
 
-    listed, unlisted, missed = [], [], []
-    for core in basis_list:
-        met_name = core.get('name', 'unknown')
+    names = [core.get('name', 'unknown') for core in basis_list]
+    decomposed = [decompose(np.asarray(core['fid']).ravel(), float(core.get('sw') or 4000.0))
+                  for core in basis_list]
+    shape = set_lineshape(basis_list, decomposed)
+    print(f"  Lineshape: {_describe(shape)}")
+
+    listed, unlisted, humps, short = [], [], [], []
+    for met_name, core, parts in zip(names, basis_list, decomposed):
         fid      = np.asarray(core['fid']).ravel()
         sf       = float(core.get('sf') or 123.26)
         sw       = float(core.get('sw') or 4000.0)
 
-        lines = decompose(fid, sw)
-        keep  = np.abs(lines['amplitude']) > 0
-        amp, freq = lines['amplitude'][keep], lines['freq'][keep]
+        if is_hump(parts, shape):
+            # no line of the set's lineshape: written as lines, VeSPA would draw sharp ones
+            print(f"  WARNING: {met_name} is a broad hump, not lines of the set's lineshape — left out")
+            humps.append(met_name)
+            continue
+        lines = fit_lines(fid, sw, shape, TOL, parts)
+        amp, freq = lines['amplitude'], lines['freq']
         if not len(amp):
             print(f"  WARNING: no lines for {met_name} — skipping")
             continue
         if lines['residual'] > TOL:
-            # its best lines do not rebuild it: written undamped, they would be another shape
-            print(f"  WARNING: no {MAX_ORDER} lines rebuild {met_name} to {TOL:g} "
-                  f"(residual {lines['residual']:.1e}) — left out")
-            missed.append(met_name)
-            continue
+            print(f"  WARNING: {MAX_LINES} lines rebuild {met_name} to {lines['residual']:.1e} only")
+            short.append(f"{met_name} ({lines['residual']:.0e})")
 
         lit = _get_lit_ppms(met_name, ppm_table)
         spins = int(round(sum(n for _, n in lit))) if lit else len(amp)
@@ -189,14 +205,21 @@ def write_vespa(basis_list, outpath,
 
     comment.text = (
         f'Prior information from basis set with {len(basis_list)} metabolites. '
-        f'Lines: each FID decomposed into decaying exponentials (HLSVD), the fewest that '
-        f'rebuild it to a relative residual of {TOL:g}; ppm, amplitude at t = 0 and phase '
-        f'of each, its damping left to the fit. Areas in the source\'s scale, the same for '
-        f'every metabolite (factor 1). Phases in VeSPA\'s sign (the conjugate FID). '
+        f'Lines: each FID fitted as undamped lines times the set\'s lineshape, '
+        f'{_describe(shape)}, as VeSPA rebuilds a basis FID from its lines and applies one '
+        f'lineshape in the fit: the fewest lines found that rebuild the FID to a relative '
+        f'residual of {TOL:g}; ppm, amplitude at t = 0 and phase of each. The lineshape is not '
+        f'in the lines: VeSPA\'s fitted lineshape is the data\'s whole lineshape. Areas in the '
+        f'source\'s scale, the same for every metabolite (factor 1). '
+        f'Phases in VeSPA\'s sign (the conjugate FID). '
         f'Spins: {counted}' + (f' for {", ".join(listed)}' if unlisted and listed else '') +
         (f'; the number of lines for {", ".join(unlisted)}' if unlisted else '') + '.' +
-        (f' Left out, as no {MAX_ORDER} lines rebuild them to {TOL:g}: {", ".join(missed)}.'
-         if missed else ''))
+        (f' Rebuilt by {MAX_LINES} lines only to: {", ".join(short)}.' if short else '') +
+        (f' Left out, as broad humps that hold no line of the set\'s lineshape (the prior\'s '
+         f'lines cannot hold them, and sharp lines in their place are wrong): {", ".join(humps)}. '
+         f'Model them with VeSPA\'s own macromolecule model (Voigt tab, macromolecule model '
+         f'"Single Basis Function - from Dataset"; analysis/block_fit_voigt.py:103, '
+         f'analysis/constants.py:548).' if humps else ''))
 
     # Write XML
     xml_str = minidom.parseString(
@@ -208,6 +231,19 @@ def write_vespa(basis_list, outpath,
 
     print(f"\n  Done. VeSPA prior XML: {os.path.basename(outpath)}")
     print(f"  {len(basis_list)} metabolites  TE={seqte} ms")
+
+
+def _describe(shape):
+    """The set's lineshape in words, for the prior's comment."""
+    widths = {'Lorentzian': f"{shape['lorentz']:.3f} Hz", 'Gaussian': f"{shape['gauss']:.3f} Hz",
+              'Voigt': f"{shape['lorentz']:.3f} Hz Lorentzian, {shape['gauss']:.3f} Hz Gaussian"}
+    text = f"{shape['kind']} {widths[shape['kind']]}" + \
+        (f" (full width {fwhm(shape):.3f} Hz)" if shape['kind'] == 'Voigt' else '')
+    if shape['source'] == 'lines':
+        return text + ', no singlet found: the median width of its lines'
+    singlets = ', '.join(shape['singlets'])
+    return text + (f', measured on {singlets}' + ('' if shape['uniform'] else
+                   ', which differ by more than 2 %'))
 
 
 ############## Helpers (the GAVA, MIDAS and OXSA writers import these) #############
