@@ -280,9 +280,14 @@ class Screen2Output(BaseScreen):
             ),
             'pyamares': (
                 "PyAMARES — CSV prior output",
-                "Selecting PyAMARES will produce a CSV prior knowledge file "
-                "with metabolite names and dominant peak PPM positions "
-                "estimated from the basis set."
+                "Selecting PyAMARES will produce a CSV prior knowledge file with "
+                "each metabolite's lines from the basis set tied to its largest one, "
+                "and one phase, one lineshape and one shift for the whole set on the "
+                "largest singlet's peak: only the amplitudes are free for each "
+                "metabolite. Fit with the MHz, carrier and deadtime its first line "
+                "states, and truncate_initial_points=1 where the data's first point "
+                "is not the FID at t = 0. The fit takes minutes; lmfit's uncertainty "
+                "step after it takes hours for the many tied peaks."
             ),
             'midas': (
                 "MIDAS — prior XML output",

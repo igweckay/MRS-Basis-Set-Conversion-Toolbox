@@ -22,6 +22,16 @@ PyAMARES CSV format (from generate_pyamares_pk_from_basis.py):
     phase, (-180,180), (-180,180), ...
     g, (0,1), (0,1), ...
 
+BasiC's own CSV (writers/write_pyamares.py) starts with '#' comment lines and ties peaks by
+expressions, as PyAMARES allows (kernel/PriorKnowledge.py 0.3.28): '#' starts a comment, as
+in PyAMARES' pandas.read_csv(comment='#'), and a cell holding letters is an expression, which
+is read as PyAMARES reads it. Only its first number counts with its unit (refindall: 'ppm'
+times MHz, 'Hz' dropped); the name it starts with is the same parameter of a peak to its left,
+in PyAMARES' internal units (Hz, dk = pi * Hz, radians): NAA*0.5, NAA+61.6Hz, NAA, NAA+0.16.
+Such a cell is returned evaluated, in the CSV's units (ppm, Hz, degrees), and its text kept
+under 'expressions'. MHz is the `mhz` given, else the 'MHz=' a comment states; without either
+a chemical shift tied in Hz is NaN.
+
 Peak params dict returned:
     {
         'names'         : list of str
@@ -35,19 +45,27 @@ Peak params dict returned:
         'lw_bounds'     : list of tuple  — (lower_hz, upper_hz)
         'phase_bounds'  : list of tuple  — (lower_deg, upper_deg)
         'g_bounds'      : list of tuple  — (0, 1) always
+        'expressions'   : dict row -> list of str or None, each tied cell's text
+        'mhz'           : float or None, the MHz the chemical shifts were evaluated with
+        'comment'       : list of str, the comment lines, '#' removed
         'source'        : str, path to .csv file
     }
 
 Entry point:
-    read_pyamares(path) -> peak params dict
+    read_pyamares(path, mhz=None) -> peak params dict
 """
 
 import os
+import re
+import ast
 import csv
+import operator
 import numpy as np
 
+ROWS = ('amplitude', 'chemicalshift', 'linewidth', 'phase', 'g')
 
-def read_pyamares(path):
+
+def read_pyamares(path, mhz=None):
     """
     Read a PyAMARES prior knowledge CSV file.
 
@@ -55,6 +73,9 @@ def read_pyamares(path):
     ----------
     path : str
         Full path to a PyAMARES .csv file.
+    mhz  : float or None
+        The MHz PyAMARES would be given, for chemical shifts tied in Hz; by default the
+        'MHz=' a comment line states.
 
     Returns
     -------
@@ -66,7 +87,12 @@ def read_pyamares(path):
         raise RuntimeError(f"File not found: {path}")
 
     with open(path, 'r', newline='') as f:
-        rows = list(csv.reader(f))
+        text = f.read().splitlines()
+    comment = [line.split('#', 1)[1].strip() for line in text if '#' in line]
+    rows = [r for r in csv.reader(line.split('#', 1)[0] for line in text) if any(c.strip() for c in r)]
+    if mhz is None:
+        stated = re.search(r'MHz\s*=\s*([0-9]+(?:\.[0-9]+)?)', ' '.join(comment))
+        mhz = float(stated.group(1)) if stated else None
 
     if not rows:
         raise RuntimeError(f"Empty CSV file: {os.path.basename(path)}")
@@ -98,10 +124,8 @@ def read_pyamares(path):
             section = 'bounds'
             continue
 
-        if section == 'init' and label in ('amplitude', 'chemicalshift',
-                                            'linewidth', 'phase', 'g'):
-            vals = row[1:n_metabs + 1]
-            init_rows[label] = [_parse_float(v) for v in vals]
+        if section == 'init' and label in ROWS:
+            init_rows[label] = [v.strip() for v in row[1:n_metabs + 1]]
 
         if section == 'bounds' and label in ('amplitude', 'chemicalshift',
                                               'linewidth', 'phase', 'g'):
@@ -116,6 +140,11 @@ def read_pyamares(path):
             f"Missing initial value rows in {os.path.basename(path)}: "
             f"{', '.join(missing)}"
         )
+    expressions = {label: [v if _is_expression(v) else None for v in init_rows[label]]
+                   for label in ROWS}
+    for label in ROWS:
+        init_rows[label] = _evaluate_row(label, init_rows[label], names, mhz,
+                                         os.path.basename(path))
 
     ############## Build result dict #############
     result = {
@@ -136,6 +165,9 @@ def read_pyamares(path):
                             [(-180.0, 180.0)] * n_metabs),
         'g_bounds'      : bounds_rows.get('g',
                             [(0.0, 1.0)] * n_metabs),
+        'expressions'   : expressions,
+        'mhz'           : mhz,
+        'comment'       : comment,
         'source'        : path,
     }
 
@@ -144,6 +176,72 @@ def read_pyamares(path):
 
 
 ############## Internal helpers #############
+
+_OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+        ast.Div: operator.truediv, ast.Pow: operator.pow, ast.USub: operator.neg,
+        ast.UAdd: operator.pos}
+# a number cell in the CSV's units -> PyAMARES' internal units, and back (unitconverter)
+_TO = {'chemicalshift': lambda v, mhz: v * mhz, 'linewidth': lambda v, mhz: v * np.pi,
+       'phase': lambda v, mhz: np.radians(v)}
+_FROM = {'chemicalshift': lambda v, mhz: v / mhz, 'linewidth': lambda v, mhz: v / np.pi,
+         'phase': lambda v, mhz: np.degrees(v)}
+
+
+def _evaluate_row(label, cells, names, mhz, filename):
+    """
+    One row of initial values as floats in the CSV's units, each expression evaluated as
+    PyAMARES evaluates it: in the internal units, its first name the same parameter of a peak
+    to its left. A chemical shift row is evaluated at 1 MHz where none is known (its Hz-tied
+    cells are then NaN).
+    """
+    scale = mhz if mhz else 1.0
+    to = _TO.get(label, lambda v, m: v)
+    back = _FROM.get(label, lambda v, m: v)
+    internal, out = {}, []
+    for name, cell in zip(names, cells):
+        if not _is_expression(cell):
+            value = _parse_float(cell)
+            internal[name] = to(value, scale)
+            out.append(value)
+            continue
+        expr = cell.replace(' ', '')
+        match = re.search(r'([-+]?\d+(\.\d+)?)(Hz|ppm)?', expr)        # refindall
+        hz = bool(match and match.group(3) == 'Hz')
+        if match and match.group(3) == 'ppm':
+            expr = expr.replace(match.group(1) + 'ppm', str(float(match.group(1)) * scale))
+        elif hz:
+            expr = expr.replace('Hz', '')
+        try:
+            value = _expression(ast.parse(expr, mode='eval').body, internal)
+        except (SyntaxError, KeyError, TypeError, ZeroDivisionError) as ex:
+            raise RuntimeError(f"{filename}: {label} of {name} is '{cell}', which PyAMARES "
+                               f"cannot evaluate from the peaks to its left ({ex})")
+        internal[name] = value
+        out.append(float('nan') if label == 'chemicalshift' and hz and not mhz
+                   else float(back(value, scale)))
+    return out
+
+
+def _is_expression(cell):
+    """A cell PyAMARES reads as an expression: text that is not a number (pd.to_numeric)."""
+    try:
+        float(cell)
+        return False
+    except ValueError:
+        return bool(cell.strip())
+
+
+def _expression(node, values):
+    """An arithmetic expression of numbers and names (the values of peaks to the left)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    if isinstance(node, ast.Name):
+        return values[node.id]
+    if isinstance(node, ast.BinOp) and type(node.op) in _OPS:
+        return _OPS[type(node.op)](_expression(node.left, values), _expression(node.right, values))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _OPS:
+        return _OPS[type(node.op)](_expression(node.operand, values))
+    raise TypeError(ast.dump(node))
 
 def _parse_float(val):
     """

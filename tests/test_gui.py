@@ -233,6 +233,51 @@ def test_osprey_alone_offers_its_macromolecules_checked_and_screen_2_keeps_the_c
     }
 
 
+PYAMARES_TEXT = """
+import json
+import tkinter as tk
+
+try:
+    root = tk.Tk()
+except tk.TclError as error:
+    print(error)
+    raise SystemExit(3)
+root.withdraw()
+
+from core.formats import ALL_TOOLS
+from screen2_output import Screen2Output
+
+
+class App:
+    def quit(self):
+        pass
+
+    def show_screen(self, name):
+        pass
+
+
+screen = Screen2Output(root, {}, App())
+screen._on_tool_selected(next(t for t in ALL_TOOLS if t['id'] == 'pyamares'))
+print(json.dumps([screen.info_panel_title.cget('text'), screen.info_panel_body.cget('text')]))
+"""
+
+
+@pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
+def test_screen_2_says_what_the_pyamares_prior_holds():
+    run = subprocess.run([sys.executable, '-c', PYAMARES_TEXT], capture_output=True, text=True,
+                         cwd=os.path.join(ROOT, 'basis_converter'))
+    if run.returncode == 3:
+        pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
+
+    assert run.returncode == 0, run.stderr
+    title, body = json.loads(run.stdout)
+    assert title == 'PyAMARES — CSV prior output'
+    for said in ("each metabolite's lines", 'tied', 'one phase, one lineshape and one shift',
+                 'largest singlet', 'carrier', 'truncate_initial_points=1', 'uncertainty'):
+        assert said in body, said
+    assert 'dominant peak' not in body
+
+
 WRITTEN_FOR_OSPREY = """
 import os
 import sys

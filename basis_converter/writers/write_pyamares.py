@@ -21,14 +21,23 @@ The lines are the VeSPA prior's (write_vespa.vespa_lines): each FID fitted as un
 times the set's lineshape, measured on its singlets, which is what tied AMARES peaks are when
 every sub-peak's linewidth and g are the base peak's. For each metabolite:
 
-    the base peak (a digit-free name): its largest line, free: amplitude (|c|, the source's
-        scale, the same for every metabolite), chemicalshift (absolute ppm), linewidth and g
-        (the set's lineshape: dk(1 - g) = pi * Lorentzian width and dk * g =
-        (pi * Gaussian width)**2 / (4 ln 2) make AMARES' damping the measured Voigt exactly),
-        phase (degrees), with bounds;
+    the base peak (a digit-free name): its largest line, its amplitude free (|c|, the
+        source's scale, the same for every metabolite; bounds '(0,');
     sub-peaks <base>2, <base>3, ... in decreasing amplitude, tied to the base by expressions:
         amplitude <base>*<ratio>, chemicalshift <base>+<offset>Hz, linewidth <base>,
         phase <base>+<offset in radians>, g <base>.
+
+And for the set, one phase, one lineshape and one shift, as the data have them (a zero-order
+phase; VeSPA's one lineshape for all, LCModel's one common shift): the base peak of the largest
+singlet (reference(): of the singlets the lineshape was measured on, the largest line; sI for
+the jMRUI sample) is the first column and carries the free chemicalshift (absolute ppm, +-0.1),
+linewidth and g (the set's lineshape: dk(1 - g) = pi * Lorentzian width and dk * g =
+(pi * Gaussian width)**2 / (4 ln 2) make AMARES' damping the measured Voigt exactly; 0 to it +
+80 Hz) and phase (degrees, +-180). Every other base peak is tied to it as the basis holds them:
+chemicalshift <ref>+<offset>Hz, phase <ref>+<offset in radians>, linewidth and g <ref>. Freed
+shifts let AMARES swap neighbours (Cr and PCr, 0.02 ppm apart, did, with 88 free parameters
+for the jMRUI sample; now 25). To free one metabolite's shift or phase, its expression is
+replaced by a number and bounds; its sub-peaks follow it.
 
 PyAMARES evaluates an expression in its internal units (extract_expr, 96-157: freq in Hz, dk,
 phase in radians) and reads only an expression's first number with its unit (refindall, 16-25):
@@ -47,16 +56,19 @@ holding MM). The comment gives each changed name's source.
 Humps (macromolecules, lipids): they hold no line of the set's lineshape (lines.is_hump), but an
 AMARES peak has its own width. A hump whose HLSVD components (lines.decompose) rebuild it to the
 same criterion is written as its own metabolite: its largest component the base, the others tied
-with linewidth as an offset from the base's (in dk, pi * Hz). One they do not rebuild (the jMRUI
-sample's MM) is left out and named in the comment.
+with linewidth as an offset from the base's (in dk, pi * Hz), and the base's linewidth an offset
+from the reference's, so a broader line broadens the hump by the same Lorentzian; its g is 0
+(Lorentzian components), fixed. One they do not rebuild (the jMRUI sample's MM) is left out and
+named in the comment.
 
 The criterion is the VeSPA prior's (TOL), so the peaks rebuild each function as PyAMARES models
 it, to 1e-4 from the second point: hundreds of tied peaks for coupled spins. A PyAMARES fit of
-such a prior is slow, but not for the fit's sake (a few minutes for the jMRUI sample): after
+such a prior is slow, but not for the fit's sake (about a minute for the jMRUI sample): after
 it, lmfit propagates the uncertainties to every tied parameter, evaluating all of them once per
 free one (Parameters.create_uvars, asteval_with_uncertainties), a time that grows with the
-square of the tied parameters, and fitAMARES always does it. For the jMRUI sample that is hours
-at 1e-4 and still about an hour at 1e-2, a rebuild 100 times worse; no criterion that keeps the
+square of the tied parameters and with the free ones, and fitAMARES always does it. For the
+jMRUI sample (25 free parameters) that is about two hours of CPU at 1e-4 and 20 minutes at 1e-2,
+a rebuild 100 times worse (with 88 free, 82 minutes at 1e-2); no criterion that keeps the
 rebuild honest makes it short, so the criterion stays, and the comment says what to expect.
 
 CSV layout (PyAMARES reads rows iloc[1:6] as initial values and iloc[7:] as bounds, 81, 204):
@@ -83,7 +95,7 @@ from writers.lines import TOL, MAX_LINES
 from writers.write_vespa import vespa_lines
 
 
-PPM_ROOM = 0.08     # the base peak's chemical shift bound: its ppm +- this
+PPM_ROOM = 0.1      # the reference peak's chemical shift bound: its ppm +- this
 LW_ROOM = 80.0      # its linewidth bound: from 0 to the basis' own + this (Hz)
 
 
@@ -142,26 +154,40 @@ def write_pyamares(basis_list, outpath, seqte=None, tol=TOL, progress=None):
             left.append(name)
     # named over the whole set, so that a name means the same function whatever is left out
     names = {n: base for n, base in pyamares_names(list(sf)).items() if n in peaks}
+    ref = reference(peaks, shape)
+    names = {ref: names[ref], **{n: b for n, b in names.items() if n != ref}}   # to the left
+    ref_base = names[ref]
+    _, ppm_r, d_r, phi_r = peaks[ref][0]
+    dk_r = np.pi * lw0 if d_r is None else d_r
 
     columns = []        # (column name, [5 initial values], [5 bounds])
     for name, base in names.items():
         lines = peaks[name]
         amp1, ppm1, d1, phi1 = lines[0]
-        lw1 = lw0 if d1 is None else d1 / np.pi
-        columns.append((base,
-                        [_num(amp1), _num(ppm1), _num(lw1), _num(np.degrees(phi1)),
-                         _num(g0 if d1 is None else 0.0)],
-                        ['(0,', f'({_num(ppm1 - PPM_ROOM)},{_num(ppm1 + PPM_ROOM)})',
-                         f'(0,{_num(lw1 + LW_ROOM)})',
-                         f'({_num(np.degrees(phi1) - 180)},{_num(np.degrees(phi1) + 180)})',
-                         '(0,1)']))
+        dk1 = np.pi * lw0 if d1 is None else d1
+        if name == ref:     # the set's one free shift, lineshape and phase
+            columns.append((base,
+                            [_num(amp1), _num(ppm1), _num(dk1 / np.pi), _num(np.degrees(phi1)),
+                             _num(g0 if d1 is None else 0.0)],
+                            ['(0,', f'({_num(ppm1 - PPM_ROOM)},{_num(ppm1 + PPM_ROOM)})',
+                             f'(0,{_num(dk1 / np.pi + LW_ROOM)})',
+                             f'({_num(np.degrees(phi1) - 180)},{_num(np.degrees(phi1) + 180)})',
+                             '(0,1)' if d1 is None else '(0,0)']))
+        else:               # tied to the reference as the basis holds it; amplitude free
+            columns.append((base,
+                            [_num(amp1),
+                             f'{ref_base}{_signed((ppm1 - ppm_r) * sf[name])}Hz',
+                             ref_base if d1 is None and d_r is None else
+                             f'{ref_base}{_signed(dk1 - dk_r)}',
+                             f'{ref_base}{_signed(_wrap(phi1 - phi_r))}',
+                             ref_base if d1 is None else '0'],
+                            ['(0,', '', '(0,', '', '' if d1 is None else '(0,0)']))
         for k, (amp, ppm, d, phi) in enumerate(lines[1:], 2):
-            dphi = (phi - phi1 + np.pi) % (2 * np.pi) - np.pi
             columns.append((f'{base}{k}',
                             [f'{base}*{_num(amp / amp1)}',
                              f'{base}{_signed((ppm - ppm1) * sf[name])}Hz',
                              base if d is None else f'{base}{_signed(d - d1)}',
-                             f'{base}{_signed(dphi)}',
+                             f'{base}{_signed(_wrap(phi - phi1))}',
                              base],
                             ['', '', '(0,', '', '']))
 
@@ -187,6 +213,14 @@ def write_pyamares(basis_list, outpath, seqte=None, tol=TOL, progress=None):
         f'Linewidth and g start at the set\'s lineshape as AMARES damping dk((1-g)t+gt^2), '
         f'dk = pi * linewidth: linewidth {_num(lw0)} Hz, g {_num(g0)}' +
         (' (fit with g_global=False to use it).' if g0 else '.'),
+        f'One phase, one lineshape and one shift for the set, as the data have them: the first '
+        f'column, {ref_base} (the largest line of the largest singlet{f", {ref}" if ref != ref_base else ""}), '
+        f'carries the free chemical shift (+-{PPM_ROOM:g} ppm), linewidth, g and phase (+-180 '
+        f'degrees). Every other metabolite\'s first column is tied to it as the basis holds them: '
+        f'chemical shift as an offset in Hz, phase as an offset in radians, linewidth and g '
+        f'equal (a hump\'s linewidth as an offset in dk, its g 0). Amplitudes are free for each '
+        f'metabolite. To free one metabolite\'s shift or phase, replace the expression in its '
+        f'first column by a number (ppm or degrees) and give it bounds; its <name>2, ... follow it.',
     ]
     if kept:
         comment.append(f'Broad humps as their own damped components (HLSVD), each with its own '
@@ -200,10 +234,12 @@ def write_pyamares(basis_list, outpath, seqte=None, tol=TOL, progress=None):
                        '(PyAMARES: truncate_initial_points).')
     if found['short']:
         comment.append(f'Rebuilt by {MAX_LINES} lines only to: {", ".join(found["short"])}.')
-    comment.append(f'{len(columns)} peaks: {4 * len(names)} free parameters (g fixed, as by '
-                   f'default) and {5 * (len(columns) - len(names))} tied ones. After the fit, '
-                   f'fitAMARES (lmfit) propagates the uncertainties to each tied parameter by '
-                   f'evaluating all of them once per free one: its time grows with the square of '
+    tied = sum(any(ch.isalpha() for ch in cell) for c in columns for cell in c[1])
+    comment.append(f'{len(columns)} peaks: {len(names) + 3} free parameters (each metabolite\'s '
+                   f'amplitude, and {ref_base}\'s shift, linewidth and phase; g fixed as by '
+                   f'default, {ref_base}\'s free with g_global=False) and {tied} tied ones. After '
+                   f'the fit, fitAMARES (lmfit) propagates the uncertainties to each tied parameter '
+                   f'by evaluating all of them once per free one: its time grows with the square of '
                    f'the tied parameters, hours for thousands.')
     if renamed:
         comment.append('Names (PyAMARES allows digits only as a multiplet\'s suffix): ' +
@@ -223,6 +259,21 @@ def write_pyamares(basis_list, outpath, seqte=None, tol=TOL, progress=None):
 
     print(f"\n  Done. PyAMARES CSV written: {os.path.basename(outpath)}")
     print(f"  {len(names)} metabolites, {len(columns)} peaks")
+
+
+def reference(peaks, shape):
+    """
+    The metabolite whose first peak carries the set's free shift, linewidth, g and phase: of the
+    singlets the set's lineshape was measured on (lines.set_lineshape), the one whose largest line
+    is largest (the jMRUI sample: sI, six equal protons); with none of those, the metabolite with
+    the largest line of the set's lineshape, else the largest. Every other peak is tied to it as
+    the basis holds them, so which one it is changes only what the bounds are put on.
+    `peaks`: name -> [(amplitude, ppm, damping or None, phase)], the largest first.
+    """
+    lines = [n for n in peaks if peaks[n][0][2] is None]
+    for group in ([n for n in lines if n in shape.get('singlets', {})], lines, list(peaks)):
+        if group:
+            return max(group, key=lambda n: peaks[n][0][0])
 
 
 def pyamares_names(names):
@@ -263,6 +314,11 @@ def _num(x):
     text = np.format_float_positional(float(x), precision=10, unique=False, fractional=False,
                                       trim='-')
     return '0' if text in ('-0', '') else text
+
+
+def _wrap(phi):
+    """An angle in radians within [-pi, pi)."""
+    return (phi + np.pi) % (2 * np.pi) - np.pi
 
 
 def _signed(x):
