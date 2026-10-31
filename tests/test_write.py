@@ -597,6 +597,26 @@ def test_gava_and_midas_name_the_source_file_without_its_folders(tmp_path):
         assert SAMPLES not in open(path).read() and 'sample_basis_sets' not in open(path).read(), tool
 
 
+def test_jmrui_files_name_themselves_without_the_output_folder(tmp_path):
+    """Each jMRUI .txt states its own file name, as FSL-MRS's writejMRUItxt does, not the full
+    output path, which would show the user's folders in a file they may share. FSL-MRS names a
+    function without SignalNames after that name, so it is the metabolite's; BasiC's reader
+    reads the files back as before."""
+    import numpy as np
+    outdir = tmp_path / 'my_folders' / 'jmrui_out'
+    basis = _jmrui()
+    written = write_basis(basis, 'jmrui', 'default', str(outdir))
+
+    for path in written:
+        text = open(path).read()
+        assert f'\nFilename: {os.path.basename(path)}\n' in text
+        assert str(tmp_path) not in text and 'my_folders' not in text and 'jmrui_out' not in text
+    back = load_basis(written, detect_format(written)['format'])
+    assert [b['name'] for b in back] == [b['name'] for b in basis]
+    for a, b in zip(basis, back):
+        assert np.allclose(a['fid'], b['fid'], atol=1e-12 * np.abs(a['fid']).max())
+
+
 def test_the_tool_lists_say_what_oxsa_gets_and_reads():
     """OXSA gets a PK_<set>.m prior knowledge function (write_oxsa), not a script, and reads that,
     not a PyAMARES CSV: the PyAMARES peaks handed to write_oxsa are gone, from the code and from
