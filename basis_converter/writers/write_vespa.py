@@ -54,8 +54,10 @@ VeSPA prior format:
     </vespa_export>
 
 vespa_lines fits the set once and gives these lines; write_gava and write_midas write the same
-lines, as VeSPA-Simulation writes its simulation's lines to all three formats. The literature
-table is used here for spins only; the peak helpers below are OXSA's (write_oxsa imports them).
+lines, as VeSPA-Simulation writes its simulation's lines to all three formats, and write_pyamares
+ties them as PyAMARES sub-peaks (with the humps' own components, which an AMARES peak can hold).
+The literature table is used here for spins only; the peak helpers below are OXSA's (write_oxsa
+imports them).
 """
 
 import os
@@ -211,13 +213,14 @@ def write_vespa(basis_list, outpath,
     print(f"  {len(basis_list)} metabolites  TE={seqte} ms")
 
 
-def vespa_lines(basis_list, progress=None):
+def vespa_lines(basis_list, progress=None, tol=TOL, hump=None):
     """
     The lines a VeSPA prior holds for each function of a set, as VeSPA-Simulation writes them to
     its Analysis prior and to GAVA and MIDAS alike (dialog_mixed_metabolite_output.py: all three
     take the simulation's same ppms, areas and phases): ppm absolute, area the amplitude at
     t = 0 on the source's scale (factor 1), phase in degrees in VeSPA's sign, each rounded as
-    the prior writes it. The set's lineshape is measured once and every function fitted once.
+    the prior writes it. The set's lineshape is measured once and every function fitted once,
+    to the relative residual `tol` (TOL for VeSPA, GAVA and MIDAS).
 
     Returns a dict:
         'metabolites' : [(name, [(ppm, area, phase), ...], residual)], the set's order
@@ -225,7 +228,11 @@ def vespa_lines(basis_list, progress=None):
         'short'       : 'name (residual)' of those MAX_LINES lines rebuild only to that residual
         'skipped'     : names with no lines
         'lineshape'   : the set's lineshape in words
-    progress(text, sub), if given, is called with the lineshape and once a function.
+        'shape'       : the set's lineshape (lines.set_lineshape)
+        'components'  : each hump's HLSVD components (lines.decompose), by name
+    progress(text, sub), if given, is called with the lineshape and once a function. A writer
+    whose format can hold a hump's own widths (PyAMARES) passes hump(name, components): what to
+    report for it, or None where it is left out after all.
     """
     basis_list = at_centre(basis_list)     # the lines' ppm are read at CENTRE
     names = [core.get('name', 'unknown') for core in basis_list]
@@ -237,7 +244,8 @@ def vespa_lines(basis_list, progress=None):
     if progress:
         progress("Lineshape of the set's lines", described)
 
-    found = {'metabolites': [], 'humps': [], 'short': [], 'skipped': [], 'lineshape': described}
+    found = {'metabolites': [], 'humps': [], 'short': [], 'skipped': [], 'lineshape': described,
+             'shape': shape, 'components': {}}
     for count, (met_name, core, parts) in enumerate(zip(names, basis_list, decomposed), 1):
         done = f"{count}/{len(names)}: {met_name}"
         fid = np.asarray(core['fid']).ravel()
@@ -246,12 +254,16 @@ def vespa_lines(basis_list, progress=None):
 
         if is_hump(parts, shape):
             # no line of the set's lineshape: written as lines, VeSPA would draw sharp ones
-            print(f"  WARNING: {met_name} is a broad hump, not lines of the set's lineshape — left out")
             found['humps'].append(met_name)
+            found['components'][met_name] = parts
+            kept = hump(met_name, parts) if hump else None
+            if not kept:
+                print(f"  WARNING: {met_name} is a broad hump, not lines of the set's lineshape — left out")
             if progress:
-                progress(f"Lines {done}", "left out: a broad hump, not lines of the set's lineshape")
+                progress(f"Lines {done}", kept or
+                         "left out: a broad hump, not lines of the set's lineshape")
             continue
-        lines = fit_lines(fid, sw, shape, TOL, parts)
+        lines = fit_lines(fid, sw, shape, tol, parts)
         amp, freq = lines['amplitude'], lines['freq']
         if not len(amp):
             print(f"  WARNING: no lines for {met_name} — skipping")
@@ -259,7 +271,7 @@ def vespa_lines(basis_list, progress=None):
             if progress:
                 progress(f"Lines {done}", "no lines: skipped")
             continue
-        if lines['residual'] > TOL:
+        if lines['residual'] > tol:
             print(f"  WARNING: {MAX_LINES} lines rebuild {met_name} to {lines['residual']:.1e} only")
             found['short'].append(f"{met_name} ({lines['residual']:.0e})")
 

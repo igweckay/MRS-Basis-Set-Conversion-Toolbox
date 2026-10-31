@@ -46,7 +46,7 @@ Why TOL = 1e-4: the text formats' precision floors the residual (the LCModel sam
 SLASER_Siemens26.basis at about 3e-6, jMRUI's .txt at 1e-7); at 1e-5 the margin is 3x, and at
 1e-6 the LCModel functions take any number of noise lines.
 
-Used by write_vespa.
+Used by write_vespa (and through it by write_gava, write_midas and write_pyamares).
 """
 
 import numpy as np

@@ -566,6 +566,161 @@ def test_gava_and_midas_state_the_echo_time_and_report_each_metabolite(tmp_path)
         assert steps == ["Lineshape of the set's lines", 'Lines 1/2: NAA', 'Lines 2/2: Cr391'], tool
 
 
+def _pyamares_peaks(path):
+    """The peaks of a PyAMARES prior as PyAMARES evaluates them (kernel/PriorKnowledge.py 0.3.28),
+    in its internal units: ak, freq (Hz), dk (pi * Hz), phi (radians) and g. A number cell is in
+    the CSV's units (ppm times the MHz the comment states, Hz, degrees, unitconverter); an
+    expression names its base (the name without digits), which stands to its left, and is in the
+    internal units: <base>*<ratio>, <base>+-<offset>Hz, <base> or <base>+-<offset in dk>,
+    <base>+-<radians>, <base>. Numbers in expressions are positional (refindall reads one number
+    and its unit; 1e-05 would be two). Returns the peaks in order, the comment lines and the
+    bounds by peak."""
+    import csv
+    import re
+    import numpy as np
+    text = open(path).read().splitlines()
+    comment = [line for line in text if line.startswith('#')]
+    assert text[:len(comment)] == comment                  # find_header_row: comments first
+    rows = list(csv.reader(text[len(comment):]))
+    assert [r[0] for r in rows] == ['Index', 'Initial Values', 'amplitude', 'chemicalshift',
+                                    'linewidth', 'phase', 'g', 'Bounds', 'amplitude',
+                                    'chemicalshift', 'linewidth', 'phase', 'g']
+    mhz = float(re.search(r'MHz=([0-9.]+)', comment[0]).group(1))
+    number = r'([+-][0-9]+(?:\.[0-9]+)?)'
+    peaks, bounds = {}, {}
+    for i, name in enumerate(rows[0][1:], 1):
+        amp, ppm, lw, phase, g = (rows[k][i] for k in range(2, 7))
+        bounds[name] = [rows[k][i] for k in range(8, 13)]
+        base = ''.join(c for c in name if not c.isdigit())
+        if name == base:
+            peaks[name] = {'ak': float(amp), 'freq': float(ppm) * mhz, 'dk': np.pi * float(lw),
+                           'phi': np.radians(float(phase)), 'g': float(g)}
+            continue
+        b = peaks[base]                                      # KeyError: not to its left
+        ratio = re.fullmatch(re.escape(base) + r'\*([0-9]+(?:\.[0-9]+)?)', amp)
+        shift = re.fullmatch(re.escape(base) + number + 'Hz', ppm)
+        width = re.fullmatch(re.escape(base) + number, lw) if lw != base else None
+        turn = re.fullmatch(re.escape(base) + number, phase)
+        assert ratio and shift and (width or lw == base) and turn and g == base, (name, amp, ppm, lw, phase, g)
+        peaks[name] = {'ak': b['ak'] * float(ratio.group(1)), 'freq': b['freq'] + float(shift.group(1)),
+                       'dk': b['dk'] + (float(width.group(1)) if width else 0.0),
+                       'phi': b['phi'] + float(turn.group(1)), 'g': b['g']}
+    return peaks, comment, bounds
+
+
+def _pyamares_fid(peaks, n, sw):
+    """PyAMARES' model (kernel/fid.py equation6) of peaks, at deadtime 0."""
+    import numpy as np
+    t = np.arange(n) / sw
+    return sum(p['ak'] * np.exp(1j * p['phi']) * np.exp(-p['dk'] * (1 - p['g'] + p['g'] * t) * t)
+               * np.exp(2j * np.pi * p['freq'] * t) for p in peaks)
+
+
+def test_pyamares_gets_each_metabolite_s_lines_as_tied_sub_peaks(tmp_path):
+    """PyAMARES fits each peak as ak exp(i phi) exp(-dk (1 - g + g t) t) exp(2 pi i f t), with the
+    data shifted by the carrier (kernel/fid.py, PriorKnowledge.initialize_FID): with
+    carrier = 4.65 and deadtime = 0 a basis' line c exp(2 pi i f t) is a peak at 4.65 + f / sf ppm
+    with phase +angle(c), the basis' own sign, not VeSPA's. A set whose lines share a Voigt
+    lineshape (2 Hz Lorentzian, 3 Hz Gaussian): each metabolite is its largest line as a base peak
+    with a digit-free name and its other lines as <base>2, <base>3, ... tied to it (amplitude ratio,
+    shift offset in Hz, phase offset in radians, linewidth and g the base's), and the Voigt is
+    AMARES' damping exactly (dk = pi * 2 + (pi * 3)**2 / (4 ln 2), g its Gaussian share).
+    PyAMARES' model of the written peaks gives back each function from its second point to the
+    criterion. A hump of two damped components is written as its own metabolite, linewidths tied
+    as offsets; the jMRUI sample's MM, which HLSVD components do not rebuild, is left out and
+    named. MM09 and MM, Cr391 and Cr would be one row in result_sum: MM09 is MM_a, Cr391 is
+    Cr_a. The first line states MHz, the carrier, deadtime=0 and each metabolite's total."""
+    import re
+    import numpy as np
+    from writers.lines import TOL
+    sw, sf, n = 4000.0, 123.2618, 2048
+    t = np.arange(n) / sw
+    voigt = np.exp(-np.pi * 2.0 * t - (np.pi * 3.0 * t) ** 2 / (4 * np.log(2)))
+
+    def fid(lines):                                                      # ppm, area, phase
+        return voigt * (lines[:, 1] * np.exp(1j * np.radians(lines[:, 2]))
+                        * np.exp(2j * np.pi * np.outer(t, (lines[:, 0] - 4.65) * sf))).sum(axis=1)
+    known = np.array([[3.027, 3.0, 0.0],
+                      [1.31 + 5.0 / sf, 1.5, 10.0],
+                      [1.31 - 5.0 / sf, 1.4, -20.0],
+                      [3.913, 0.7, 40.0]])
+    hump = (5.0 * np.exp(-np.pi * 30.0 * t + 2j * np.pi * (0.9 - 4.65) * sf * t)
+            + 2.0j * np.exp(-np.pi * 45.0 * t + 2j * np.pi * (1.3 - 4.65) * sf * t))
+    mm = load_basis([os.path.join(SAMPLES, 'JMRUI', 'MM.txt')], 'jMRUI .txt')[0]
+    basis = [{'name': name, 'fid': f, 'sw': sw, 'sf': sf, 'n': n} for name, f in
+             (('Gly', fid(np.array([[3.548, 2.0, 0.0]]))), ('Known', fid(known)),
+              ('Cr391', fid(np.array([[3.913, 1.0, 5.0]]))), ('Cr', fid(np.array([[3.027, 3.0, 0.0]]))),
+              ('MM09', hump))] + [mm]
+    steps = []
+    path = write_basis(basis, 'pyamares', 'default', str(tmp_path), te=35.0,
+                       progress=lambda text, sub=None: steps.append((text, sub)))[0]
+    peaks, comment, bounds = _pyamares_peaks(path)
+
+    groups = {}
+    for name in peaks:
+        groups.setdefault(''.join(c for c in name if not c.isdigit()), []).append(name)
+    assert list(groups) == ['Gly', 'Known', 'Cr_a', 'Cr', 'MM_a']
+    assert groups['Known'] == ['Known', 'Known2', 'Known3', 'Known4']
+    assert [p for p in groups['MM_a']] == ['MM_a', 'MM_a2']
+    for name, core in zip(groups, basis):
+        want = core['fid'] * np.exp(2j * np.pi * 4.65 * sf * t)              # the carrier's shift
+        got = _pyamares_fid([peaks[p] for p in groups[name]], n, sw)
+        assert np.linalg.norm((got - want)[1:]) <= 1.1 * TOL * np.linalg.norm(want[1:]), name
+
+    k = sorted(groups['Known'], key=lambda p: peaks[p]['freq'])        # 1.27, 1.35, 3.027, 3.913
+    assert np.allclose([peaks[p]['freq'] / sf for p in k], np.sort(known[:, 0]), atol=0.001)
+    assert np.allclose([peaks[p]['ak'] for p in k], [1.4, 1.5, 3.0, 0.7], rtol=0.001)
+    assert np.allclose(np.degrees([peaks[p]['phi'] for p in k]), [-20.0, 10.0, 0.0, 40.0], atol=0.5)
+    dk = np.pi * 2.0 + (np.pi * 3.0) ** 2 / (4 * np.log(2))
+    assert np.allclose([peaks[p]['dk'] for p in k], dk, rtol=1e-3) and \
+        np.allclose([peaks[p]['g'] for p in k], (dk - np.pi * 2.0) / dk, rtol=1e-3)
+    assert np.allclose(sorted(peaks[p]['dk'] / np.pi for p in groups['MM_a']), [30.0, 45.0], atol=1e-3)
+    assert bounds['Known'][0] == '(0,' and bounds['Known2'] == ['', '', '(0,', '', '']
+
+    assert 'MHz=123.2618' in comment[0] and 'carrier=4.65' in comment[0] and 'deadtime=0' in comment[0]
+    assert 'TE 35 ms' in comment[0]
+    total = dict(re.findall(r'([A-Za-z_]+) ([0-9.]+)(?:;|\.$)', comment[0].split('function): ')[1]))
+    for name, members in groups.items():
+        assert np.isclose(float(total[name]), sum(peaks[p]['ak'] for p in members), rtol=1e-8), name
+    text = ' '.join(comment)
+    assert 'Left out: MM:' in text and 'g_global=False' in text
+    assert 'Cr_a = Cr391' in text and 'MM_a = MM09' in text
+    assert [s for s, _ in steps][-1] == 'Lines 6/6: MM' and 'left out' in steps[-1][1]
+    assert steps[-2][1].startswith('2 damped components')
+
+
+def test_pyamares_prior_of_the_jmrui_sample_keeps_each_metabolite_apart(tmp_path):
+    """The jMRUI sample as PyAMARES reads it: 22 metabolites (MM left out, MM09 as its 10 Hz peak),
+    each one row of result_sum (names distinct once digits are removed), each rebuilt from its
+    second point by PyAMARES' model to the criterion, NAA where it is (2.008 ppm, its largest
+    line 29.62 with phase -3.2 degrees, as HSVD gives it), at the set's 1 Hz Lorentzian."""
+    import re
+    import numpy as np
+    from writers.lines import TOL
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f) for f in sorted(os.listdir(folder))], 'jMRUI .txt')
+    path = write_basis(basis, 'pyamares', 'default', str(tmp_path))[0]
+    peaks, comment, bounds = _pyamares_peaks(path)
+
+    groups = {}
+    for name in peaks:
+        groups.setdefault(''.join(c for c in name if not c.isdigit()), []).append(name)
+    source = {b['name']: b for b in basis}
+    renamed = dict(re.findall(r'([A-Za-z_]+) = ([A-Za-z0-9]+)', next(c for c in comment if 'Names' in c)))
+    assert len(groups) == 22 and 'MM' not in groups and renamed['MM_a'] == 'MM09'
+    assert set(renamed.get(g, g) for g in groups) == set(source) - {'MM'}
+    for name, members in groups.items():
+        core = source[renamed.get(name, name)]
+        t = np.arange(len(core['fid'])) / core['sw']
+        want = core['fid'] * np.exp(2j * np.pi * 4.65 * core['sf'] * t)
+        got = _pyamares_fid([peaks[p] for p in members], len(t), core['sw'])
+        assert np.linalg.norm((got - want)[1:]) <= 1.1 * TOL * np.linalg.norm(want[1:]), name
+    naa = peaks['NAA']
+    assert abs(naa['freq'] / 123.2618 - 2.008) < 1e-3 and abs(naa['ak'] - 29.62) < 0.01
+    assert abs(np.degrees(naa['phi']) + 3.22) < 0.01 and np.isclose(naa['dk'], np.pi, rtol=1e-6)
+    assert np.isclose(peaks['MM_a']['dk'], 10 * np.pi, rtol=1e-6) and len(groups['MM_a']) == 1
+
+
 def _oxsa_ppm(path):
     """Each OXSA component's expected ppm, by metabolite."""
     import re
@@ -587,8 +742,7 @@ def test_prior_writers_keep_a_stated_centre(tmp_path):
         for core, label in ((naa, 'stated none'), (moved, 'at 3.0')):
             path = write_basis([core], tool, 'default', str(tmp_path / tool))[0]
             if tool == 'pyamares':
-                rows = {r.split(',')[0]: r.split(',')[1:] for r in open(path).read().splitlines()[:6]}
-                ppm = float(rows['chemicalshift'][0])
+                ppm = _pyamares_peaks(path)[0]['NAA']['freq'] / naa['sf']
             else:
                 ppm = _oxsa_ppm(path)['NAA']
             assert abs(ppm - 2.008) < 0.01, (tool, label, ppm)
