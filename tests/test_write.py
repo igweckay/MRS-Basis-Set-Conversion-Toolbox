@@ -54,6 +54,21 @@ def test_raw_files_without_their_parameters_take_those_given(tmp_path):
     assert detect_format(written)['data']['sw'] == 4000
 
 
+def test_raw_files_without_seqpar_are_lcmodel_raw_and_ask_for_what_they_lack():
+    """A .raw holding only $NMID is plain LCModel .raw, whoever wrote it (MARSS does too):
+    the label says LCModel, the spectral width, frequency and echo time are asked for."""
+    folder = os.path.join(SAMPLES, 'LCModel', 'raw_files')
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.raw'))
+    result = detect_format(files)
+
+    assert result['status'] == 'full'
+    assert result['format'] == 'LCModel .raw'
+    assert result['compatible_tools'] == ['LCModel', 'SPANT', 'TARQUIN']
+    assert sorted(result['missing']) == ['sf', 'sw', 'te']
+    assert 'MARSS' in result['message']
+    assert len(load_basis(files, result['format'], sw=4000.0, sf=123.2)) == 23
+
+
 def test_fsl_mrs_fields_are_the_frequency_and_the_linewidth(tmp_path):
     """FSL-MRS's fsl_io reads basis_centre as the spectrometer frequency in MHz and
     basis_width as the linewidth; the ppm reference is its nucleus' default, not stored."""

@@ -25,13 +25,6 @@ FORMAT_TOOLS = {
         'MARSS',
     ],
 
-    'MARSS .raw': [
-        'MARSS',
-        'LCModel',
-        'SPANT',
-        'TARQUIN',
-    ],
-
     ############## LCModel #############
     'LCModel .BASIS': [
         'LCModel',

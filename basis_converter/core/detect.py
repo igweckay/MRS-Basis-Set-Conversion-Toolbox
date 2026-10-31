@@ -488,21 +488,22 @@ def _try_mat_folder(paths):
 
 def _try_raw_folder(paths):
     """
-    Folder of .raw files — detect whether MARSS or LCModel format.
-    MARSS .raw has no $SEQPAR block — sw and sf will be missing.
-    LCModel .raw has $SEQPAR with HZPPPM, NUNFIL, DELTAT.
+    Folder of LCModel .raw files.
+    With a $SEQPAR block (HZPPPM, NUNFIL, DELTAT) the file states its spectral width and
+    frequency. Without one (only $NMID, as MARSS writes them) it does not, and they are
+    asked for; the reader is the same either way.
     """
     try:
         from readers.read_lcmodel import read_lcmodel_raw
         r = read_lcmodel_raw(paths[0])
         names = [os.path.splitext(os.path.basename(p))[0] for p in paths]
-        is_marss = r.get('is_marss_raw', False)
+        no_seqpar = r.get('is_marss_raw', False)
 
-        if is_marss:
-            # MARSS .raw — no spectral params in file
+        if no_seqpar:
+            # LCModel .raw without $SEQPAR — no spectral params in file
             return {
                 'status':           'full',
-                'format':           'MARSS .raw',
+                'format':           'LCModel .raw',
                 'ambiguous_options': [],
                 'data': {
                     'sw':    None,
@@ -512,7 +513,8 @@ def _try_raw_folder(paths):
                     'names': names,
                 },
                 'missing': ['sw', 'sf', 'te'],
-                'message': 'MARSS .raw basis functions detected. '
+                'message': 'LCModel .raw basis functions detected, without a $SEQPAR '
+                           'block (MARSS writes them this way too). '
                            'Spectral width and Larmor frequency not stored — '
                            'will be requested on next screen.',
             }
