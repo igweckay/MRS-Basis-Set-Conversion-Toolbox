@@ -9,8 +9,9 @@ Osprey's macromolecules: screen 2 is built on a hidden Tk root and its tools pic
 skipped likewise; screen 4 writes the .mat with its widgets stubbed out, as for the
 step bar. Several basis sets in one folder: screen 1 is built on a hidden Tk root, given
 each folder and one of its sets picked, skipped likewise. New conversion: main.App is built
-hidden, converts, and is reset, skipped likewise. A failed conversion: screen 4 converts
-with its widgets stubbed out, as for the step bar.
+hidden, converts, and is reset, skipped likewise. A failed conversion and a VeSPA export:
+main.App is built hidden and screen 4 converts, skipped likewise; these three also check that
+the conversion thread never calls Tk.
 
 The screens are imported in a separate Python, so that tkinter stays out of this
 process and the other tests can still check that core runs without it.
@@ -469,34 +470,60 @@ def test_screen_1_lets_the_user_pick_one_of_several_basis_sets_and_converts_only
 
 
 
-NEW_CONVERSION = """
+
+# Screen 4 converts in a thread. Tk may only be called from the main thread: a tkinter that takes
+# Tcl for unthreaded (3.11 and 3.12 with Tcl 9) runs a call from the thread as it comes, which
+# corrupts Tcl's memory or hangs. So the scripts below build the App on a tkapp that notes every
+# call made from any other thread, and run screen 4 as it runs for the user, with no stand-ins.
+TK_WATCHED = """
+import threading
+import tkinter
+import _tkinter
+
+off_main = []
+tk_create = _tkinter.create
+
+
+class Watched:
+    def __init__(self, tkapp):
+        self._tkapp = tkapp
+
+    def __getattr__(self, name):
+        attr = getattr(self._tkapp, name)
+        if not callable(attr):
+            return attr
+
+        def call(*args, **kwargs):
+            if threading.current_thread() is not threading.main_thread():
+                off_main.append(name)
+            return attr(*args, **kwargs)
+        return call
+
+
+tkinter._tkinter.create = lambda *args: Watched(tk_create(*args))
+"""
+
+
+def run_hidden(script, *args, timeout=180):
+    """The script in a separate Python, as the tests above run theirs; hanging counts as failing."""
+    try:
+        return subprocess.run([sys.executable, '-c', script, *args], capture_output=True, text=True,
+                              cwd=os.path.join(ROOT, 'basis_converter'), timeout=timeout)
+    except subprocess.TimeoutExpired as hung:
+        stderr = hung.stderr.decode(errors='replace') if isinstance(hung.stderr, bytes) else hung.stderr
+        pytest.fail(f'still running after {timeout} s; stderr: {stderr}')
+
+
+NEW_CONVERSION = TK_WATCHED + """
 import json
 import os
 import sys
 import time
 import tkinter as tk
 
-import queue
-import threading
-
 import screen4_convert
 from core.formats import ALL_TOOLS
 from main import App
-
-# The conversion thread hands its widget updates to the main loop with after(). tkinter
-# 3.11 takes Tcl 9 for unthreaded and would run them in the thread itself, which corrupts
-# Tcl's memory; so here the main loop takes them off a queue, as a threaded Tcl would.
-handed = queue.Queue()
-tk_after = screen4_convert.Screen4Convert.after
-
-
-def after(self, ms, func=None, *args):
-    if threading.current_thread() is threading.main_thread():
-        return tk_after(self, ms, func, *args)
-    handed.put((func, args))
-
-
-screen4_convert.Screen4Convert.after = after
 
 try:
     app = App()
@@ -518,7 +545,7 @@ def widgets(widget):
 
 def convert(seen, key):
     # The conversion thread reaches the widgets through the main loop, so this runs in it.
-    app.show_screen('screen4')               # starts the conversion thread
+    app.show_screen('screen4')               # starts the conversion
     started = str(screen4.new_btn.cget('state'))
     end = time.time() + 60
     while str(screen4.new_btn.cget('state')) != 'normal' and time.time() < end:
@@ -556,9 +583,6 @@ def clicks(seen):
 
 
 def tick():
-    while not handed.empty():
-        func, args = handed.get()
-        func(*args)
     try:
         next(steps)
         app.after(20, tick)
@@ -570,6 +594,7 @@ seen = {}
 steps = clicks(seen)
 app.after(0, tick)
 app.mainloop()
+seen['tk off the main thread'] = sorted(set(off_main))
 print(json.dumps(seen))
 """
 
@@ -579,8 +604,7 @@ def test_new_conversion_starts_from_an_empty_screen_1_and_screen_4_wants_files(t
     """After a conversion, New conversion leaves no card on screen 1, its Next disabled, and no
     tool picked on screen 2, as at start-up. Screen 4 shown with no files says so without asking
     for an output folder. New conversion is disabled again while screen 4 converts."""
-    run = subprocess.run([sys.executable, '-c', NEW_CONVERSION, str(tmp_path)], capture_output=True,
-                         text=True, cwd=os.path.join(ROOT, 'basis_converter'))
+    run = run_hidden(NEW_CONVERSION, str(tmp_path))
     if run.returncode == 3:
         pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
 
@@ -593,42 +617,59 @@ def test_new_conversion_starts_from_an_empty_screen_1_and_screen_4_wants_files(t
     assert seen['after'] == {'card': 0, 'next 1': 'disabled', 'tool': None, 'next 2': 'disabled', 'files': 0}
     assert seen['empty'] == {'title': 'Conversion failed', 'asked': 0, 'new conversion while converting': 'disabled',
                              'error': 'No input files to convert. Go back to screen 1 and upload a basis set.'}
+    assert seen['tk off the main thread'] == []
 
 
-FAILED_CONVERSION = """
+CONVERTED = TK_WATCHED + """
 import json
-import os
 import sys
+import time
 import tkinter as tk
-from types import SimpleNamespace
 
 import screen4_convert
-from base_screen import BaseScreen
-from screen4_convert import Screen4Convert
+from main import App
 
-tk.Frame.__init__ = lambda self, *args, **kwargs: None
-BaseScreen._build_header = lambda self: None
-BaseScreen._build_step_bar = lambda self: None
-Screen4Convert.build_body = lambda self: None
-screen4_convert.filedialog.askdirectory = lambda **kwargs: sys.argv[1]
+try:
+    app = App()
+except tk.TclError as error:
+    print(error)
+    raise SystemExit(3)
+app.withdraw()
 
-shown = []
-
-
-def after(self, ms, func=None, *args):    # the folder is asked at once, the rest recorded
-    if func.__name__ == 'ask':
-        return func()
-    shown.append([func.__name__, [str(a) for a in args]])
+asked = []                               # for each folder asked: on the main thread?
+screen4_convert.filedialog.askdirectory = lambda **kwargs: (
+    asked.append(threading.current_thread() is threading.main_thread()) or sys.argv[1])
+screen4 = app.screens['screen4']
 
 
-Screen4Convert.after = after
-combined = os.path.join('..', 'sample_basis_sets', 'MRSCLOUD', 'BASIS_Siemens_UnEdited_sLASER_105_wMM.mat')
-screen = Screen4Convert(None, {'files': [combined], 'detected_format': 'MRSCloud .mat',
-                               'output_tool': 'LCModel', 'output_tool_id': 'lcmodel',
-                               'output_format': 'basis'}, None)
-screen.progress_title = SimpleNamespace(config=lambda *args, **kwargs: None)
-screen._run_conversion()
-print(json.dumps(shown[-1]))
+def widgets(widget):
+    yield widget
+    for child in widget.winfo_children():
+        yield from widgets(child)
+
+
+def labels(widget):
+    return [w.cget('text') for w in widgets(widget) if isinstance(w, tk.Label)]
+
+
+end = time.time() + 120
+
+
+def wait():
+    if str(screen4.new_btn.cget('state')) == 'normal' or time.time() > end:
+        app.quit()
+    else:
+        app.after(20, wait)
+
+
+app.state.update(json.loads(sys.argv[2]))
+app.show_screen('screen4')
+app.after(20, wait)
+app.mainloop()
+print(json.dumps({'title': screen4.progress_title.cget('text'),
+                  'steps': [labels(row)[1:] for row in screen4.step_list.winfo_children()],
+                  'window': labels(screen4.scroll_frame), 'asked on the main thread': asked,
+                  'tk off the main thread': sorted(set(off_main))}))
 """
 
 
@@ -636,12 +677,43 @@ print(json.dumps(shown[-1]))
 def test_a_failed_conversion_prints_its_traceback_and_shows_its_message(tmp_path):
     """Read as single MRSCloud files, MRSCloud's combined BASIS_*.mat fails in the reader: the
     window shows the message alone, as before, and stderr holds the traceback to it."""
-    run = subprocess.run([sys.executable, '-c', FAILED_CONVERSION, str(tmp_path)],
-                         capture_output=True, text=True, cwd=os.path.join(ROOT, 'basis_converter'))
+    combined = os.path.join('..', 'sample_basis_sets', 'MRSCLOUD', 'BASIS_Siemens_UnEdited_sLASER_105_wMM.mat')
+    run = run_hidden(CONVERTED, str(tmp_path), json.dumps({
+        'files': [combined], 'detected_format': 'MRSCloud .mat',
+        'output_tool': 'LCModel', 'output_tool_id': 'lcmodel', 'output_format': 'basis'}))
+    if run.returncode == 3:
+        pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
 
     assert run.returncode == 0, run.stderr
+    seen = json.loads(run.stdout.splitlines()[-1])
     message = "Missing field 'txfrq' in BASIS_Siemens_UnEdited_sLASER_105_wMM.mat"
-    assert json.loads(run.stdout.splitlines()[-1]) == ['_set_error', [message]]
+    assert seen['title'] == 'Conversion failed' and seen['window'][-1] == message
+    assert seen['steps'] == [['Loading input files', 'MRSCloud .mat']]
+    assert seen['asked on the main thread'] == [True] and seen['tk off the main thread'] == []
     assert 'Traceback (most recent call last)' in run.stderr
     assert 'in _convert' in run.stderr and 'read_mrscloud.py' in run.stderr
     assert run.stderr.rstrip().endswith(f'RuntimeError: {message}')
+
+
+@pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
+def test_screen_4_lists_each_vespa_metabolite_as_its_lines_are_fitted(tmp_path):
+    """The VeSPA writer's progress reaches screen 4's step list from the conversion thread
+    through the main loop, a row for the lineshape and one a metabolite, in order."""
+    folder = os.path.join('..', 'sample_basis_sets', 'JMRUI')
+    run = run_hidden(CONVERTED, str(tmp_path), json.dumps({
+        'files': [os.path.join(folder, f) for f in ('NAA.txt', 'Cr391.txt')], 'detected_format': 'jMRUI .txt',
+        'output_tool': 'VeSPA Analysis', 'output_tool_id': 'vespa_analysis', 'output_format': 'default'}))
+    if run.returncode == 3:
+        pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
+
+    assert run.returncode == 0, run.stderr
+    seen = json.loads(run.stdout.splitlines()[-1])
+    assert seen['title'] == 'Conversion complete'
+    steps = seen['steps']
+    assert [step[0] for step in steps] == ['Loading input files', 'Loaded 2 metabolites',
+                                           'Writing VeSPA Analysis format', "Lineshape of the set's lines",
+                                           'Lines 1/2: NAA', 'Lines 2/2: Cr391', 'Done']
+    assert steps[3][1].startswith('Lorentzian 1.000 Hz') and steps[4][1].startswith('17 lines, residual')
+    assert steps[6] == ['Done', f'Output: {tmp_path}']
+    assert [f for f in os.listdir(tmp_path) if f.endswith('.xml')]
+    assert seen['asked on the main thread'] == [True] and seen['tk off the main thread'] == []
