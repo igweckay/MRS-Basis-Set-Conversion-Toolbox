@@ -236,6 +236,11 @@ class Screen2Output(BaseScreen):
 
     ############## Selection handlers #############
 
+    def reset(self):
+        """Back to start-up: no tool picked, Next disabled (screen 4's New conversion)."""
+        if self.selected_tool:
+            self._on_tool_selected(self.selected_tool)   # its card clicked again: picked off
+
     def _on_tool_selected(self, tool):
         # Deselect previous
         if self.selected_tool:

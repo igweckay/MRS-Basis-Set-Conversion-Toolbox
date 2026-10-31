@@ -8,7 +8,8 @@ hidden Tk root and typed into; the test is skipped when Tk cannot open a window.
 Osprey's macromolecules: screen 2 is built on a hidden Tk root and its tools picked,
 skipped likewise; screen 4 writes the .mat with its widgets stubbed out, as for the
 step bar. Several basis sets in one folder: screen 1 is built on a hidden Tk root, given
-each folder and one of its sets picked, skipped likewise.
+each folder and one of its sets picked, skipped likewise. New conversion: main.App is built
+hidden, converts, and is reset, skipped likewise.
 
 The screens are imported in a separate Python, so that tkinter stays out of this
 process and the other tests can still check that core runs without it.
@@ -464,3 +465,130 @@ def test_screen_1_lets_the_user_pick_one_of_several_basis_sets_and_converts_only
                                        files=1, format='Osprey .mat', loaded=33)
     assert seen['JMRUI'] == [{'titles': ['Detected format'], 'badges': ['Recognized'], 'dropdowns': [],
                               'shown': [], 'next': 'normal'}]
+
+
+
+NEW_CONVERSION = """
+import json
+import os
+import sys
+import time
+import tkinter as tk
+
+import queue
+import threading
+
+import screen4_convert
+from core.formats import ALL_TOOLS
+from main import App
+
+# The conversion thread hands its widget updates to the main loop with after(). tkinter
+# 3.11 takes Tcl 9 for unthreaded and would run them in the thread itself, which corrupts
+# Tcl's memory; so here the main loop takes them off a queue, as a threaded Tcl would.
+handed = queue.Queue()
+tk_after = screen4_convert.Screen4Convert.after
+
+
+def after(self, ms, func=None, *args):
+    if threading.current_thread() is threading.main_thread():
+        return tk_after(self, ms, func, *args)
+    handed.put((func, args))
+
+
+screen4_convert.Screen4Convert.after = after
+
+try:
+    app = App()
+except tk.TclError as error:
+    print(error)
+    raise SystemExit(3)
+app.withdraw()
+
+asked = []
+screen4_convert.filedialog.askdirectory = lambda **kwargs: asked.append(1) or sys.argv[1]
+screen1, screen2, screen4 = (app.screens[name] for name in ('screen1', 'screen2', 'screen4'))
+
+
+def widgets(widget):
+    yield widget
+    for child in widget.winfo_children():
+        yield from widgets(child)
+
+
+def convert(seen, key):
+    # The conversion thread reaches the widgets through the main loop, so this runs in it.
+    app.show_screen('screen4')               # starts the conversion thread
+    started = str(screen4.new_btn.cget('state'))
+    end = time.time() + 60
+    while str(screen4.new_btn.cget('state')) != 'normal' and time.time() < end:
+        yield
+    labels = [w.cget('text') for w in widgets(screen4.scroll_frame) if isinstance(w, tk.Label)]
+    seen[key] = {'title': screen4.progress_title.cget('text'), 'error': labels[-1], 'asked': len(asked),
+                 'new conversion while converting': started}
+
+
+def seen_now():
+    return {
+        'card': len(screen1.result_frame.winfo_children()),
+        'next 1': str(screen1.next_btn.cget('state')),
+        'tool': screen2.selected_tool and screen2.selected_tool['id'],
+        'next 2': str(screen2.next_btn.cget('state')),
+        'files': len(app.state.get('files', [])),
+    }
+
+
+def clicks(seen):
+    folder = os.path.join('..', 'sample_basis_sets', 'JMRUI')
+    screen1._load_files([os.path.join(folder, f) for f in ('NAA.txt', 'Cr391.txt')])
+    app.show_screen('screen2')
+    screen2._on_tool_selected(next(t for t in ALL_TOOLS if t['id'] == 'lcmodel'))
+    next(w for w in widgets(screen2) if isinstance(w, tk.Radiobutton) and w.cget('value') == 'basis').invoke()
+    seen['before'] = seen_now()
+    screen2._on_next()
+    app.state['params'] = {'te': 26.0}
+    yield from convert(seen, 'converted')
+    screen4.new_btn.invoke()
+    yield
+    seen['after'] = seen_now()
+    del asked[:]
+    yield from convert(seen, 'empty')
+
+
+def tick():
+    while not handed.empty():
+        func, args = handed.get()
+        func(*args)
+    try:
+        next(steps)
+        app.after(20, tick)
+    except StopIteration:
+        app.quit()
+
+
+seen = {}
+steps = clicks(seen)
+app.after(0, tick)
+app.mainloop()
+print(json.dumps(seen))
+"""
+
+
+@pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
+def test_new_conversion_starts_from_an_empty_screen_1_and_screen_4_wants_files(tmp_path):
+    """After a conversion, New conversion leaves no card on screen 1, its Next disabled, and no
+    tool picked on screen 2, as at start-up. Screen 4 shown with no files says so without asking
+    for an output folder. New conversion is disabled again while screen 4 converts."""
+    run = subprocess.run([sys.executable, '-c', NEW_CONVERSION, str(tmp_path)], capture_output=True,
+                         text=True, cwd=os.path.join(ROOT, 'basis_converter'))
+    if run.returncode == 3:
+        pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
+
+    assert run.returncode == 0, run.stderr
+    seen = json.loads(run.stdout.splitlines()[-1])
+    assert seen['before'] == {'card': 1, 'next 1': 'normal', 'tool': 'lcmodel', 'next 2': 'normal', 'files': 2}
+    assert seen['converted']['title'] == 'Conversion complete'
+    assert seen['converted']['new conversion while converting'] == 'disabled'
+    assert [f for f in os.listdir(tmp_path) if f.endswith('.BASIS')]
+    assert seen['after'] == {'card': 0, 'next 1': 'disabled', 'tool': None, 'next 2': 'disabled', 'files': 0}
+    assert seen['empty'] == {'title': 'Conversion failed', 'asked': 0, 'new conversion while converting': 'disabled',
+                             'error': 'No input files to convert. Go back to screen 1 and upload a basis set.'}

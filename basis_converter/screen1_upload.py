@@ -978,6 +978,10 @@ class Screen1Upload(BaseScreen):
 
     ############## Clear #############
 
+    def reset(self):
+        """Back to start-up: no upload, no card, Next disabled (screen 4's New conversion)."""
+        self._clear_all()
+
     def _clear_all(self):
         """Reset screen and shared state."""
         for key in ['files', 'detected_format', 'detection_status',

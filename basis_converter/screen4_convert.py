@@ -69,6 +69,7 @@ class Screen4Convert(BaseScreen):
         self._status       = 'idle'
         self._steps_done   = []
         self._output_paths = []
+        self.new_btn.config(bg="#e5e7eb", fg="#9ca3af", state="disabled", cursor="")
         self._build_context_bar()
         self._build_progress_area()
         # Start conversion in background thread
@@ -359,6 +360,10 @@ class Screen4Convert(BaseScreen):
         tool_id  = self.state.get('output_tool_id', '')
         out_fmt  = self.state.get('output_format', 'default')
 
+        if not files:
+            raise RuntimeError("No input files to convert. "
+                               "Go back to screen 1 and upload a basis set.")
+
         #################### Ask user for output folder #################### 
         outdir = self.after(0, self._ask_output_folder)
         # Since filedialog must run on main thread, use a synchronized approach
@@ -465,6 +470,8 @@ class Screen4Convert(BaseScreen):
                     'output_tool', 'output_tool_id', 'output_format',
                     'add_mm', 'output_path', 'params']:
             self.state.pop(key, None)
+        self.app.screens["screen1"].reset()
+        self.app.screens["screen2"].reset()
         self.app.show_screen("screen1")
 
     #################### Utilities ##############################
