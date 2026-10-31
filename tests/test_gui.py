@@ -9,7 +9,8 @@ Osprey's macromolecules: screen 2 is built on a hidden Tk root and its tools pic
 skipped likewise; screen 4 writes the .mat with its widgets stubbed out, as for the
 step bar. Several basis sets in one folder: screen 1 is built on a hidden Tk root, given
 each folder and one of its sets picked, skipped likewise. New conversion: main.App is built
-hidden, converts, and is reset, skipped likewise.
+hidden, converts, and is reset, skipped likewise. A failed conversion: screen 4 converts
+with its widgets stubbed out, as for the step bar.
 
 The screens are imported in a separate Python, so that tkinter stays out of this
 process and the other tests can still check that core runs without it.
@@ -592,3 +593,55 @@ def test_new_conversion_starts_from_an_empty_screen_1_and_screen_4_wants_files(t
     assert seen['after'] == {'card': 0, 'next 1': 'disabled', 'tool': None, 'next 2': 'disabled', 'files': 0}
     assert seen['empty'] == {'title': 'Conversion failed', 'asked': 0, 'new conversion while converting': 'disabled',
                              'error': 'No input files to convert. Go back to screen 1 and upload a basis set.'}
+
+
+FAILED_CONVERSION = """
+import json
+import os
+import sys
+import tkinter as tk
+from types import SimpleNamespace
+
+import screen4_convert
+from base_screen import BaseScreen
+from screen4_convert import Screen4Convert
+
+tk.Frame.__init__ = lambda self, *args, **kwargs: None
+BaseScreen._build_header = lambda self: None
+BaseScreen._build_step_bar = lambda self: None
+Screen4Convert.build_body = lambda self: None
+screen4_convert.filedialog.askdirectory = lambda **kwargs: sys.argv[1]
+
+shown = []
+
+
+def after(self, ms, func=None, *args):    # the folder is asked at once, the rest recorded
+    if func.__name__ == 'ask':
+        return func()
+    shown.append([func.__name__, [str(a) for a in args]])
+
+
+Screen4Convert.after = after
+combined = os.path.join('..', 'sample_basis_sets', 'MRSCLOUD', 'BASIS_Siemens_UnEdited_sLASER_105_wMM.mat')
+screen = Screen4Convert(None, {'files': [combined], 'detected_format': 'MRSCloud .mat',
+                               'output_tool': 'LCModel', 'output_tool_id': 'lcmodel',
+                               'output_format': 'basis'}, None)
+screen.progress_title = SimpleNamespace(config=lambda *args, **kwargs: None)
+screen._run_conversion()
+print(json.dumps(shown[-1]))
+"""
+
+
+@pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
+def test_a_failed_conversion_prints_its_traceback_and_shows_its_message(tmp_path):
+    """Read as single MRSCloud files, MRSCloud's combined BASIS_*.mat fails in the reader: the
+    window shows the message alone, as before, and stderr holds the traceback to it."""
+    run = subprocess.run([sys.executable, '-c', FAILED_CONVERSION, str(tmp_path)],
+                         capture_output=True, text=True, cwd=os.path.join(ROOT, 'basis_converter'))
+
+    assert run.returncode == 0, run.stderr
+    message = "Missing field 'txfrq' in BASIS_Siemens_UnEdited_sLASER_105_wMM.mat"
+    assert json.loads(run.stdout.splitlines()[-1]) == ['_set_error', [message]]
+    assert 'Traceback (most recent call last)' in run.stderr
+    assert 'in _convert' in run.stderr and 'read_mrscloud.py' in run.stderr
+    assert run.stderr.rstrip().endswith(f'RuntimeError: {message}')

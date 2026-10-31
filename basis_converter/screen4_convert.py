@@ -24,6 +24,7 @@ import os
 import tkinter as tk
 from tkinter import ttk, filedialog
 import threading
+import traceback
 
 from base_screen import BaseScreen
 
@@ -338,10 +339,12 @@ class Screen4Convert(BaseScreen):
         """
         Run the full conversion pipeline in a background thread.
         Uses self.after() to update the UI safely from the thread.
+        A failure shows its message in the window and prints its traceback to stderr.
         """
         try:
             self._convert()
         except Exception as ex:
+            traceback.print_exc()
             self.after(0, self._set_error, str(ex))
 
     def _step(self, text, sub=None):
