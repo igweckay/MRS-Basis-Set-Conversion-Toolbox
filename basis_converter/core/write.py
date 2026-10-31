@@ -10,7 +10,8 @@ Used by the GUI (screen4_convert.py) and by scripts, without a GUI.
 import os
 
 
-def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=True):
+def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=True,
+                progress=None):
     """
     Write basis functions using the appropriate writer.
 
@@ -23,6 +24,8 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=
     te         : float or None, echo time in ms (30 if None; 26 for OXSA)
     seq        : str or None, sequence name ('unedited' if None)
     add_mm     : bool, Osprey only: add Osprey's MM and lipids, as fit_makeBasis's addMMFlag
+    progress   : callable or None, VeSPA only: progress(text, sub) as each metabolite's lines
+                 are fitted (screen 4 lists them as steps)
 
     Returns
     -------
@@ -144,7 +147,7 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=
         out_file = os.path.join(outdir, 'vespa_priors.xml')
         # the echo time the functions state, else the one given
         stated = next((float(b['te']) for b in basis_list if b.get('te')), None)
-        write_vespa(basis_list, out_file, seqte=stated or te)
+        write_vespa(basis_list, out_file, seqte=stated or te, progress=progress)
         return [out_file]
 
     if tool_id in ('jet', 'spinwizard'):

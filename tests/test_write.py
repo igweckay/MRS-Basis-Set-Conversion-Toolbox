@@ -411,6 +411,98 @@ def test_vespa_lines_rebuild_each_jmrui_function():
     assert spins['NAA'] == 5 and spins['Cho'] == 5
 
 
+def _long_fid(n, sw, components, sf=123.2618):
+    """A FID of n points at sw Hz: (ppm, width in Hz, amplitude) Lorentzian components."""
+    import numpy as np
+    t = np.arange(n) / sw
+    return sum(amp * np.exp(-np.pi * width * t + 2j * np.pi * (ppm - 4.65) * sf * t)
+               for ppm, width, amp in components)
+
+
+def test_a_long_vespa_set_is_written_in_seconds(tmp_path):
+    """MRSCloud's sets are 2 s, 8192 points. The order search of the lines' HLSVD computes the
+    Hankel matrix's singular vectors for the orders it tries, not for the 300 it may try: a
+    singlet's took 5 s on its own, a 32-function set's three minutes. Three such functions are
+    written in well under the time one took (the bound is generous: the machine may be busy),
+    each to its lines."""
+    import time
+    sw, n = 4000.0, 8192
+    basis = [{'name': name, 'fid': _long_fid(n, sw, parts), 'sw': sw, 'sf': 123.2618, 'n': n}
+             for name, parts in (('Cr', [(3.027, 1.0, 3.0)]), ('sI', [(3.34, 1.0, 1.0)]),
+                                 ('Lac', [(1.31 + 3.45 / 123.2618, 1.0, 1.5),
+                                          (1.31 - 3.45 / 123.2618, 1.0, 1.5)]))]
+    start = time.time()
+    path = write_basis(basis, 'vespa_analysis', 'default', str(tmp_path))[0]
+    took = time.time() - start
+    lines, _, _ = _vespa_lines(path)
+
+    assert {name: len(found) for name, found in lines.items()} == {'Cr': 1, 'sI': 1, 'Lac': 2}
+    assert took < 10.0, took
+
+
+def test_the_line_refinement_takes_p_plus_one_rows_not_the_fid(monkeypatch):
+    """The refinement of the lines' frequencies is scipy's trust-region step, which depends on the
+    Jacobian J only through J^H J and J^H r. It is handed those as p + 1 rows for p lines, not
+    as the residual's 2n rows (16384 for MRSCloud: an SVD of 16384 x p each step), and the lines
+    still meet the criterion. Components 1.0 to 1.4 Hz wide take many lines of a 1 Hz
+    lineshape, and the refinement moves them."""
+    import numpy as np
+    from writers import lines as fit
+    sw, n = 4000.0, 4096
+    fid = _long_fid(n, sw, [(2.30, 1.4, 1.0), (2.32, 1.2, 0.7), (2.35, 1.0, 0.5)])
+    rows = []
+    least_squares = fit.least_squares
+
+    def spy(fun, x0, jac, **options):
+        rows.append((len(x0), jac(x0).shape, fun(x0).shape))
+        return least_squares(fun, x0, jac=jac, **options)
+    monkeypatch.setattr(fit, 'least_squares', spy)
+    found = fit.fit_lines(fid, sw, {'lorentz': 1.0, 'gauss': 0.0})
+
+    assert rows and all(jac == (p + 1, p) and res == (p + 1,) for p, jac, res in rows), rows[:3]
+    assert found['residual'] <= fit.TOL and len(found['freq']) > 10
+
+
+def test_a_lorentzian_s_line_sums_are_the_products_of_its_lines():
+    """For a Lorentzian set the Gram matrix of the lines and the sums the refinement's normal
+    equations take (t**l L**2 exp(2 pi i d t) summed over the FID, l = 0, 1, 2) are in closed form,
+    geometric sums and their derivatives: they are the products of the lines' matrix, for a
+    0.5 s and a 2 s FID, lines 0.3 Hz apart and the same line twice included. The lines' matrix,
+    built in blocks, is the lines'."""
+    import numpy as np
+    from writers.lines import _Lines
+    rng = np.random.default_rng(1)
+    for n, sw in ((2047, 4000.0), (8191, 4096.0)):
+        model = _Lines(n, sw, {'lorentz': 1.0, 'gauss': 0.0})
+        f = np.r_[rng.uniform(-sw / 2, sw / 2, 30), 10.0, 10.3, 10.3]
+        A = model.L[:, None] * np.exp(2j * np.pi * np.outer(model.t, f))
+        cols = np.arange(len(f)) % 2 == 0
+        closed = model.sums(f, None, 3, cols)
+        products = [A.conj().T @ A] + [A.conj().T @ (model.t[:, None] ** l * A[:, cols]) for l in (1, 2)]
+
+        assert model.closed
+        assert np.abs(model.atoms(f) - A).max() < 1e-11
+        for got, want in zip(closed, products):
+            assert np.abs(got - want).max() < 1e-11 * np.abs(want).max()
+
+
+def test_a_vespa_export_reports_each_metabolite_as_it_is_fitted(tmp_path):
+    """Screen 4 lists each metabolite as its lines are fitted: write_basis hands the VeSPA writer a
+    progress callback (screen 4 gives its step list's), called with the set's lineshape and then
+    once a metabolite, in order, a hump said to be left out. The GUI's list is not tested here."""
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f) for f in ('NAA.txt', 'Cr391.txt', 'MM09.txt')],
+                       'jMRUI .txt')
+    steps = []
+    write_basis(basis, 'vespa_analysis', 'default', str(tmp_path),
+                progress=lambda text, sub=None: steps.append((text, sub)))
+
+    assert [text for text, _ in steps] == ["Lineshape of the set's lines", 'Lines 1/3: NAA',
+                                           'Lines 2/3: Cr391', 'Lines 3/3: MM09']
+    assert steps[0][1].startswith('Lorentzian 1.000 Hz')
+    assert steps[1][1].startswith('17 lines, residual') and 'hump' in steps[3][1]
+
+
 def _oxsa_ppm(path):
     """Each OXSA component's expected ppm, by metabolite."""
     import re

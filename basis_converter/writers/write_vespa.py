@@ -119,7 +119,8 @@ PPM_CALIB = 4.65   # the centre the set is read at (a ppmCalib is a label: MARSS
 def write_vespa(basis_list, outpath,
                 seqte=26.0,
                 source='basis_set_converter',
-                metablist_path=None):
+                metablist_path=None,
+                progress=None):
     """
     Write a VeSPA Analysis prior XML file.
 
@@ -130,6 +131,8 @@ def write_vespa(basis_list, outpath,
     seqte          : float, echo time in ms
     source         : str, source description
     metablist_path : str or None, path to metabList.mat (its numberOfProtons give <spins>)
+    progress       : callable or None, progress(text, sub) once a metabolite's lines are fitted
+                     or it is left out (the GUI's step list: a large set takes a while)
     """
     basis_list = at_centre(basis_list)     # the lines' ppm are read at CENTRE
     outpath = os.path.abspath(outpath)
@@ -161,9 +164,12 @@ def write_vespa(basis_list, outpath,
                   for core in basis_list]
     shape = set_lineshape(basis_list, decomposed)
     print(f"  Lineshape: {_describe(shape)}")
+    if progress:
+        progress("Lineshape of the set's lines", _describe(shape))
 
     listed, unlisted, humps, short = [], [], [], []
-    for met_name, core, parts in zip(names, basis_list, decomposed):
+    for count, (met_name, core, parts) in enumerate(zip(names, basis_list, decomposed), 1):
+        done = f"{count}/{len(names)}: {met_name}"
         fid      = np.asarray(core['fid']).ravel()
         sf       = float(core.get('sf') or 123.26)
         sw       = float(core.get('sw') or 4000.0)
@@ -172,11 +178,15 @@ def write_vespa(basis_list, outpath,
             # no line of the set's lineshape: written as lines, VeSPA would draw sharp ones
             print(f"  WARNING: {met_name} is a broad hump, not lines of the set's lineshape — left out")
             humps.append(met_name)
+            if progress:
+                progress(f"Lines {done}", "left out: a broad hump, not lines of the set's lineshape")
             continue
         lines = fit_lines(fid, sw, shape, TOL, parts)
         amp, freq = lines['amplitude'], lines['freq']
         if not len(amp):
             print(f"  WARNING: no lines for {met_name} — skipping")
+            if progress:
+                progress(f"Lines {done}", "no lines: skipped")
             continue
         if lines['residual'] > TOL:
             print(f"  WARNING: {MAX_LINES} lines rebuild {met_name} to {lines['residual']:.1e} only")
@@ -202,6 +212,9 @@ def write_vespa(basis_list, outpath,
 
         print(f"  {met_name:15s}  {len(amp):3d} lines  "
               f"largest={CENTRE + freq[0] / sf:.4f} ppm  residual={lines['residual']:.1e}")
+        if progress:
+            progress(f"Lines {done}", f"{len(amp)} line{'s' * (len(amp) > 1)}, "
+                                      f"residual {lines['residual']:.1e}")
 
     comment.text = (
         f'Prior information from basis set with {len(basis_list)} metabolites. '

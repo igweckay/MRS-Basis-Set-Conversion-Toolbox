@@ -421,7 +421,7 @@ class Screen4Convert(BaseScreen):
         seq = self.state.get('core', {}).get('seq') or \
               self.state.get('params', {}).get('seq')
         return write_basis(basis_list, tool_id, out_fmt, outdir, te=te, seq=seq,
-                           add_mm=self.state.get('add_mm', True))
+                           add_mm=self.state.get('add_mm', True), progress=self._step)
 
     def _ask_output_folder(self):
         pass   # placeholder — actual call is in _convert via threading

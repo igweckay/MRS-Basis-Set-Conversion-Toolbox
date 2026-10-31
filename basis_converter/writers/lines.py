@@ -15,11 +15,14 @@ by HLSVD, as VeSPA's common/hlsvdpropy.py does it (Barkhuijsen et al., J Magn Re
 Laudadio et al., J Magn Reson 2002): the SVD of the FID's Hankel matrix, the signal poles z_j
 from the shift invariance of its first K left singular vectors, and the amplitudes c_j by
 least squares. The Hankel matrix is built from the whole FID (half its points a row), and
-only its leading MAX_ORDER + 25 singular vectors are computed, by a randomized range finder
-with two power iterations whose products with the matrix are FFT convolutions (Halko et al.,
-SIAM Review 2011), where HLSVDPRO uses Lanczos: a full SVD of an 8192-point FID's
-4096 x 4097 matrix takes minutes, and poles from its first 2048 points alone do not rebuild
-MRSCloud's coupled spins. The start vectors are seeded: a FID gives the same lines each time.
+only its leading singular vectors are computed, OVERSAMPLE more than the order tried, by a
+randomized range finder with two power iterations whose products with the matrix are FFT
+convolutions (Halko et al., SIAM Review 2011), where HLSVDPRO uses Lanczos: a full SVD of an
+8192-point FID's 4096 x 4097 matrix takes minutes, and poles from its first 2048 points alone
+do not rebuild MRSCloud's coupled spins. They are computed for START_ORDER poles first, and
+for twice as many each time the order search needs more: most functions need few (a singlet
+one), and the vectors' cost grows with the square of their number. The start vectors are
+seeded: a FID gives the same lines each time.
 c_j is the line's complex amplitude at t = 0 (|c_j| its spectral integral, angle(c_j) its
 phase), f_j its frequency in Hz and d_j its damping in 1/s. Its criterion: the fewest lines
 that rebuild the FID to a relative residual ||fid - lines|| / ||fid|| of at most TOL. The model
@@ -34,7 +37,10 @@ which is what VeSPA rebuilds from a prior (each line undamped, one lineshape app
 to them all). The lineshape is measured on the set's
 singlets (set_lineshape: Lorentzian, Gaussian or Voigt); the criterion is decompose's, with
 the same TOL, so the lines are judged by the rebuild VeSPA makes. A function with no line of
-the set's lineshape (is_hump: a macromolecule or lipid hump) has no such lines.
+the set's lineshape (is_hump: a macromolecule or lipid hump) has no such lines. Its sums
+(_Lines) are in closed form for a Lorentzian, and its refinement hands scipy's trust-region
+step p + 1 rows instead of the 2n of the residual (_refine): the same steps, in seconds where
+they took minutes for MRSCloud's 2 s, 8192-point set.
 
 Why TOL = 1e-4: the text formats' precision floors the residual (the LCModel sample
 SLASER_Siemens26.basis at about 3e-6, jMRUI's .txt at 1e-7); at 1e-5 the margin is 3x, and at
@@ -46,10 +52,12 @@ Used by write_vespa.
 import numpy as np
 import scipy.linalg as sla
 from scipy.optimize import least_squares
-from scipy.signal import fftconvolve
+import scipy.fft as sfft
 
 TOL = 1e-4          # largest relative residual of a rebuilt FID (from its second point)
 MAX_ORDER = 300     # most poles tried
+START_ORDER = 16    # the signal space is first computed for this many poles, then doubled
+OVERSAMPLE = 25     # and this many more vectors than poles
 
 
 def decompose(fid, sw, tol=TOL, max_order=MAX_ORDER):
@@ -64,14 +72,27 @@ def decompose(fid, sw, tol=TOL, max_order=MAX_ORDER):
     if not np.any(y):
         return _result(np.zeros(0, complex), np.zeros(0, complex), 0.0, 0, sw)
     norm = np.linalg.norm(y)
+    hankel = _Hankel(y)
+    max_order = max(1, min(max_order, hankel.rank - 1))
+    space = {}
 
-    u = _signal_space(y, max_order + 25)
-    max_order = max(1, min(max_order, u.shape[1] - 1))
+    def subspace(K):
+        """The signal space's leading vectors for order K, computed for a cap of the next power
+        of two (and OVERSAMPLE more): most functions need far fewer than max_order poles."""
+        cap = min(max_order, 1 << max(K - 1, START_ORDER - 1).bit_length())
+        if space.get('cap', 0) < K:
+            u = hankel.signal_space(cap + OVERSAMPLE)
+            space.update(cap=cap, shift=u[:-1].conj().T @ u[1:], last=u[-1].conj())
+        return space
 
     def fit(K):
-        uk = u[:, :K]
-        z = sla.eigvals(sla.lstsq(uk[:-1], uk[1:])[0])
-        a, r = _fit(y, z)
+        # the poles: the eigenvalues of the least-squares Z with u[:-1, :K] Z = u[1:, :K]. u's
+        # columns are orthonormal, so u[:-1]'s Gram matrix is I - w w^H, w its last row
+        # conjugated, and Z = (I + w w^H / (1 - w^H w)) u[:-1]^H u[1:] (Sherman and Morrison)
+        s = subspace(K)
+        w, shift = s['last'][:K], s['shift'][:K, :K]
+        z = sla.eigvals(shift + np.outer(w, w.conj() @ shift) / (1 - np.vdot(w, w).real))
+        a, r = _fit(y, z, tol * norm)
         return z, a, np.linalg.norm(r) / norm, r
 
     # the smallest order meeting TOL, by bisection between one that fails and one that meets it
@@ -95,7 +116,9 @@ def decompose(fid, sw, tol=TOL, max_order=MAX_ORDER):
         K = hi
     else:                                          # none meets TOL: the best tried
         K = min(tried, key=lambda k: tried[k][2])
-    z, a, res, r = tried[K]
+    z = tried[K][0]
+    a, r = _fit(y, z)
+    res = np.linalg.norm(r) / norm
 
     # drop the components contributing least while the rest still meet TOL
     if res <= tol:
@@ -113,43 +136,75 @@ def decompose(fid, sw, tol=TOL, max_order=MAX_ORDER):
     return _result(z, _at_zero(a, z, len(y)), res, K, sw)
 
 
-def _hankel_times(x, rows, cols, v):
-    """H @ v for the rows x cols Hankel matrix H[i, j] = x[i + j], by FFT convolution."""
-    return fftconvolve(x[:, None], v[::-1], axes=0)[cols - 1:cols - 1 + rows]
+class _Hankel:
+    """The rows x cols Hankel matrix H[i, j] = x[i + j] of x (half its points a row), whose
+    products with a block of vectors are FFT convolutions, x's transforms computed once."""
 
+    def __init__(self, x):
+        self.cols = len(x) // 2 + 1
+        self.rows = len(x) - self.cols + 1
+        self.rank = min(self.rows, self.cols)
+        self.size = sfft.next_fast_len(len(x), False)    # no product wraps onto the rows kept
+        self.fx = sfft.fft(x, self.size)
+        self.fxc = sfft.fft(np.conj(x), self.size)
 
-def _signal_space(x, k):
-    """The leading k left singular vectors of the Hankel matrix of x (half its points a row),
-    by a randomized range finder with two power iterations."""
-    n = len(x)
-    cols = n // 2 + 1
-    rows = n - cols + 1
-    k = min(k, rows, cols)
-    rng = np.random.default_rng(0)
-    q = np.linalg.qr(_hankel_times(x, rows, cols, rng.standard_normal((cols, k))
-                                   + 1j * rng.standard_normal((cols, k))))[0]
-    for _ in range(2):
-        q = np.linalg.qr(_hankel_times(np.conj(x), cols, rows, q))[0]       # H^H q
-        q = np.linalg.qr(_hankel_times(x, rows, cols, q))[0]                # H q
-    b = _hankel_times(np.conj(x), cols, rows, q).conj().T                     # q^H H
-    return q @ np.linalg.svd(b, full_matrices=False)[0]
+    def times(self, v, adjoint=False):
+        """H @ v, or H^H @ v."""
+        fx, rows, cols = ((self.fxc, self.cols, self.rows) if adjoint else
+                          (self.fx, self.rows, self.cols))
+        fv = sfft.fft(v[::-1], self.size, axis=0, workers=-1)
+        return sfft.ifft(fv * fx[:, None], axis=0, workers=-1)[cols - 1:cols - 1 + rows]
+
+    def signal_space(self, k):
+        """Its leading k left singular vectors, by a randomized range finder with two power
+        iterations (Halko et al., SIAM Review 2011); between them, the block is kept apart by
+        an LU factor, which spans what a QR factor spans at a fraction of its cost."""
+        k = min(k, self.rank)
+        rng = np.random.default_rng(0)
+        q = self.times(rng.standard_normal((self.cols, k)) + 1j * rng.standard_normal((self.cols, k)))
+        for _ in range(2):
+            q = sla.lu(q, permute_l=True, check_finite=False)[0]
+            q = sla.lu(self.times(q, adjoint=True), permute_l=True, check_finite=False)[0]
+            q = self.times(q)
+        q = np.linalg.qr(q)[0]
+        b = self.times(q, adjoint=True).conj().T                              # q^H H
+        return q @ np.linalg.svd(b, full_matrices=False)[0]
 
 
 def _columns(z, n):
-    """z_j**k for k = 1 .. n, column j; a growing pole's column is scaled to end at |1|."""
+    """z_j**k for k = 1 .. n, column j; a growing pole's column is scaled to end at |1|.
+    z**k on the first B points times its value at each block's start: a product a point, not
+    an exponential."""
     logz = np.log(z.astype(complex))
     grow = np.maximum(logz.real, 0.0)
-    k = np.arange(1, n + 1)[:, None]
+    size = int(np.ceil(np.sqrt(n)))
+    blocks = -(-n // size)
     with np.errstate(under='ignore'):
-        return np.exp(k * logz[None, :] - (n * grow)[None, :])
+        head = np.exp(np.arange(1, size + 1)[:, None] * logz[None, :])
+        start = np.exp(np.arange(blocks)[:, None] * size * logz[None, :] - (n * grow)[None, :])
+        return (start[:, None, :] * head[None, :, :]).reshape(blocks * size, len(z))[:n]
 
 
-def _fit(y, z):
+def _fit(y, z, near=None):
     """The least-squares weights of the columns of poles z on y (points 1 .. n of the FID),
-    and the residual."""
+    and the residual. With `near`, a residual norm: the normal equations, refined once
+    (seminormal equations with a correction step, Bjorck 1987), where their residual is not
+    within 1 % of it and their Gram matrix is positive definite; else, as without it, an
+    SVD-based least squares, many times slower on a long FID."""
     if len(z) == 0:
         return np.zeros(0, complex), y.copy()
     cols = _columns(z, len(y))
+    if near is not None:
+        try:
+            G = sla.cho_factor(cols.conj().T @ cols)
+            a = sla.cho_solve(G, _ah(cols, y))
+            r = y - cols @ a
+            a = a + sla.cho_solve(G, _ah(cols, r))
+            r = y - cols @ a
+            if np.all(np.isfinite(r)) and abs(np.linalg.norm(r) / near - 1) > 0.01:
+                return a, r
+        except np.linalg.LinAlgError:
+            pass
     a = sla.lstsq(cols, y)[0]
     return a, y - cols @ a
 
@@ -329,8 +384,8 @@ def fit_lines(fid, sw, shape, tol=TOL, lines=None, max_lines=MAX_LINES):
     scale = np.linalg.norm(fid[1:])
     y = fid[1:] / scale if scale else fid[1:]
     n, sw = len(y), float(sw)
-    t = np.arange(1, n + 1) / sw
-    L = lineshape(t, shape)
+    model = _Lines(n, sw, shape)
+    t, L = model.t, model.L
     if not scale:
         return {'amplitude': np.zeros(0, complex), 'freq': np.zeros(0), 'residual': 0.0}
 
@@ -339,7 +394,7 @@ def fit_lines(fid, sw, shape, tol=TOL, lines=None, max_lines=MAX_LINES):
     seeded = np.abs(lines['damping'] / np.pi - shape['lorentz']) <= SEED_WIDTH * fwhm(shape)
     f = lines['freq'][seeded]
     free = np.zeros(len(f), bool)
-    a, r = _solve(_atoms(t, L, f), y)
+    a, r = model.solve(f, y)
 
     N = 8 * (n + 1)
     grid = np.fft.fftfreq(N, 1 / sw)
@@ -360,12 +415,12 @@ def fit_lines(fid, sw, shape, tol=TOL, lines=None, max_lines=MAX_LINES):
         f, free = np.r_[f, new], np.r_[free, np.ones(len(new), bool)]
         rounds += 1
         if rounds % 3 == 0:
-            f = _refine(y, t, L, f, free, sep, 10)
-        a, r = _solve(_atoms(t, L, f), y)
+            f = _refine(model, y, f, free, sep, 10)
+        a, r = model.solve(f, y)
     if free.any():
-        f = _refine(y, t, L, f, free, sep, 30)
-    A = _atoms(t, L, f)
-    a, r = _solve(A, y)
+        f = _refine(model, y, f, free, sep, 30)
+    a, r = model.solve(f, y)
+    A = model.atoms(f)
 
     if np.linalg.norm(r) <= tol:                     # drop the lines contributing least
         energy = np.abs(a) ** 2 * np.sum(np.abs(A) ** 2, axis=0)
@@ -375,7 +430,7 @@ def fit_lines(fid, sw, shape, tol=TOL, lines=None, max_lines=MAX_LINES):
             if np.vdot(trial, trial).real <= tol ** 2:
                 r, keep[j] = trial, False
         f = f[keep]
-        a, r = _solve(_atoms(t, L, f), y)
+        a, r = model.solve(f, y)
     o = np.argsort(-np.abs(a))
     return {'amplitude': a[o] * scale, 'freq': f[o], 'residual': float(np.linalg.norm(r))}
 
@@ -404,22 +459,106 @@ def _place(fk, f, apart, sw, room, last):
     return new
 
 
-def _atoms(t, L, f):
-    """L(t) exp(2 pi i f_j t), column j."""
-    return L[:, None] * np.exp(2j * np.pi * np.outer(t, f))
+class _Lines:
+    """
+    Undamped lines times one lineshape L(t) on the FID's times t = k / sw, k = 1 .. n: their
+    matrix A, A @ a and A^H v, their least squares, and the sums the Gram matrix and the
+    refinement's normal equations are made of,
 
+        S_l[j, k] = sum_t t**l L(t)**2 exp(2 pi i (f_k - f_j) t),    l = 0, 1, 2.
 
-def _solve(A, y):
-    """The least-squares weights of the columns of A on y, and the residual (normal equations:
-    the columns are kept apart, and their Gram matrix is fast to form)."""
-    if not A.shape[1]:
-        return np.zeros(0, complex), y.copy()
-    G, b = A.conj().T @ A, A.conj().T @ y
-    try:
-        a = sla.cho_solve(sla.cho_factor(G), b)
-    except np.linalg.LinAlgError:
-        a = sla.lstsq(A, y)[0]
-    return a, y - A @ a
+    exp(2 pi i f t) on the first B points (`head`) times its value at each block's start
+    (`start`): A costs a complex product a point, not an exponential, and A @ a and A^H v are
+    matrix products of the two (O(n m) for m lines), A not formed.
+
+    For a Lorentzian, L(t)**2 exp(2 pi i d t) = exp(k s) with s = (-2 pi lw + 2 pi i d) / sw,
+    a geometric sequence: S_0 is its sum, exp(s) (exp(n s) - 1) / (exp(s) - 1), and S_1, S_2
+    the sum's derivatives in s over sw, sw**2. That is O(m**2), where the products of A are
+    O(n m**2): the 2 s MRSCloud FIDs hold 8192 points and their coupled spins hundreds of
+    lines. Its terms do not cancel where the lineshape decays to exp(-1/2) over the FID or
+    below (pi lw n / sw >= 1/2); otherwise, and for a Gaussian or a Voigt, the sums are A's
+    products.
+    """
+
+    def __init__(self, n, sw, shape):
+        self.n, self.sw = n, float(sw)
+        self.t = np.arange(1, n + 1) / self.sw
+        self.L = lineshape(self.t, shape)
+        self.lorentz = float(shape['lorentz'])
+        self.closed = not shape['gauss'] and np.pi * self.lorentz * n / self.sw >= 0.5
+        self.size = int(np.ceil(np.sqrt(n)))
+        self.blocks = -(-n // self.size)
+
+    def factors(self, f):
+        """head (B x m) and start (blocks x m): A[b B + i, j] = L head[i, j] start[b, j]."""
+        f = np.asarray(f, dtype=float)
+        head = np.exp(2j * np.pi * np.outer(np.arange(1, self.size + 1) / self.sw, f))
+        start = np.exp(2j * np.pi * np.outer(np.arange(self.blocks) * self.size / self.sw, f))
+        return head, start
+
+    def atoms(self, f):
+        """A: L(t) exp(2 pi i f_j t), column j."""
+        head, start = self.factors(f)
+        A = np.empty((self.blocks * self.size, head.shape[1]), complex)
+        np.multiply(start[:, None, :], head[None, :, :], out=A.reshape(self.blocks, self.size, -1))
+        A = A[:self.n]
+        A *= self.L[:, None]
+        return A
+
+    def operator(self, f):
+        """(A @ a, A^H v) as functions, and A where the sums need it (else None)."""
+        if not self.closed:
+            A = self.atoms(f)
+            return (lambda a: A @ a), (lambda v: _ah(A, v)), A
+        head, start = self.factors(f)
+        n, rows = self.n, self.blocks * self.size
+
+        def dot(a):
+            return self.L * ((start * a) @ head.T).ravel()[:n]
+
+        def hdot(v):
+            w = np.zeros(rows, complex)
+            w[:n] = self.L * v
+            return np.einsum('ji,ij->j', start.conj().T @ w.reshape(self.blocks, self.size),
+                             head.conj())
+        return dot, hdot, None
+
+    def sums(self, f, A=None, orders=1, cols=None):
+        """[S_0, .., S_orders-1] of the lines f: S_0 of all against all, the others of all
+        (rows) against the lines f[cols] (columns; all if None). A: the lines' matrix, which
+        the sums are products of where there is no closed form."""
+        f = np.asarray(f, dtype=float)
+        cols = slice(None) if cols is None else cols
+        if not self.closed:
+            A = self.atoms(f) if A is None else A
+            B = A[:, cols]
+            return [A.conj().T @ A] + [A.conj().T @ ((self.t ** l)[:, None] * B)
+                                       for l in range(1, orders)]
+        n, sw = self.n, self.sw
+        rho = np.exp(-2 * np.pi * self.lorentz / sw)
+        e = rho * np.outer(np.exp(-2j * np.pi * f / sw), np.exp(2j * np.pi * f / sw))
+        en = rho ** n * np.outer(np.exp(-2j * np.pi * f * n / sw), np.exp(2j * np.pi * f * n / sw))
+        c, cn = e / (e - 1), en / (en - 1)                 # exp(x) / (exp(x) - 1), x = s, n s
+        out = [c * (en - 1)]
+        if orders > 1:
+            s0, c, cn = out[0][:, cols], c[:, cols], cn[:, cols]
+            h = 1 + n * cn - c                              # d/ds log S_0
+            out.append(s0 * h / sw)
+            if orders > 2:
+                out.append(s0 * (h * h + c * (c - 1) - n * n * cn * (cn - 1)) / sw ** 2)
+        return out
+
+    def solve(self, f, y):
+        """The least-squares amplitudes of the lines f on y and the residual (normal equations:
+        the lines are kept apart, and their Gram matrix is fast to form)."""
+        if not len(f):
+            return np.zeros(0, complex), y.copy()
+        dot, hdot, A = self.operator(f)
+        try:
+            a = sla.cho_solve(sla.cho_factor(self.sums(f, A)[0]), hdot(y))
+        except np.linalg.LinAlgError:
+            a = sla.lstsq(self.atoms(f) if A is None else A, y)[0]
+        return a, y - dot(a)
 
 
 def _separation(t, L, rho):
@@ -432,9 +571,22 @@ def _separation(t, L, rho):
     return 20.0
 
 
-def _refine(y, t, L, f, free, sep, iterations):
+def _ah(A, v):
+    """A^H v, without a conjugated copy of A."""
+    return (v.conj() @ A).conj()
+
+
+def _refine(model, y, f, free, sep, iterations):
     """The frequencies of the free lines moved to lower the residual (variable projection),
-    each staying at least sep from every other line and within sep of where it was."""
+    each staying at least sep from every other line and within sep of where it was.
+
+    The step is scipy's trust-region reflective one on the residual r and its Jacobian J
+    (Kaufman's, J = -(I - A G^-1 A^H) D, D the lines' derivatives in frequency times their
+    amplitudes). That step depends on J only through J^H J and J^H r, which _Lines' sums give
+    without the 2n x p matrix J. So the problem handed to it is p + 1 rows that keep both, and
+    |r|: the Jacobian [R; 0] with R^T R = Re J^H J, and the residual [R^-T Re J^H r; rest],
+    the rest of |r|. Its step is the one the full residual gives (in exact arithmetic), at a
+    p x p SVD where the full one was a 2n x p one."""
     o = np.argsort(f)
     fs, fr = f[o], free[o]
     gap_l, gap_r = np.r_[np.inf, np.diff(fs)], np.r_[np.diff(fs), np.inf]
@@ -447,25 +599,45 @@ def _refine(y, t, L, f, free, sep, iterations):
     move = free & (hi - lo > 1e-9)
     if not move.any():
         return f
+    t, p = model.t, int(move.sum())
+    last = {}
 
     def full(x):
         g = f.copy()
         g[move] = x
         return g
 
-    def misfit(x):
-        r = _solve(_atoms(t, L, full(x)), y)[1]
-        return np.r_[r.real, r.imag]
-
-    def jacobian(x):
-        A = _atoms(t, L, full(x))
-        G = A.conj().T @ A
-        a = sla.solve(G, A.conj().T @ y, assume_a='pos')
-        D = (2j * np.pi * t)[:, None] * A[:, move] * a[move]
-        J = -(D - A @ sla.solve(G, A.conj().T @ D, assume_a='pos'))     # Kaufman
-        return np.r_[J.real, J.imag]
+    def reduced(x):
+        """The p + 1 rows (residual, Jacobian) at x; the last kept for the Jacobian's call."""
+        if last.get('x') is not None and np.array_equal(last['x'], x):
+            return last['rows']
+        g = full(x)
+        dot, hdot, A = model.operator(g)
+        G, S1, S2 = model.sums(g, A, 3, move)
+        C = sla.cholesky(G, lower=True)                             # G = C C^H
+        a = sla.cho_solve((C, True), hdot(y))
+        r = y - dot(a)
+        am = a[move]
+        W = sla.solve_triangular(C, 2j * np.pi * S1 * am, lower=True)  # C^-1 A^H D
+        JJ = (4 * np.pi ** 2 * np.outer(np.conj(am), am) * S2[move] - W.conj().T @ W).real
+        Jr = (2j * np.pi * np.conj(am) * hdot(t * r)[move]
+              + W.conj().T @ sla.solve_triangular(C, hdot(r), lower=True)).real
+        rr = np.vdot(r, r).real
+        try:
+            R = sla.cholesky((JJ + JJ.T) / 2)
+            z = sla.solve_triangular(R, Jr, trans='T')
+            if z @ z > rr * (1 + 1e-6):
+                raise np.linalg.LinAlgError
+        except np.linalg.LinAlgError:                           # J short of full rank
+            w, V = np.linalg.eigh((JJ + JJ.T) / 2)
+            keep = w > p * np.finfo(float).eps * max(w.max(), 0.0)
+            R = np.sqrt(np.where(keep, w, 0.0))[:, None] * V.T
+            z = np.where(keep, V.T @ Jr / np.sqrt(np.where(keep, w, 1.0)), 0.0)
+        rows = (np.r_[z, np.sqrt(max(rr - z @ z, 0.0))], np.r_[R, np.zeros((1, p))])
+        last.update(x=x.copy(), rows=rows)
+        return rows
 
     x0 = np.clip(f[move], lo[move] + 1e-12, hi[move] - 1e-12)
-    return full(least_squares(misfit, x0, jac=jacobian, bounds=(lo[move], hi[move]),
-                              method='trf', max_nfev=iterations).x)
-
+    return full(least_squares(lambda x: reduced(x)[0], x0, jac=lambda x: reduced(x)[1],
+                              bounds=(lo[move], hi[move]), method='trf',
+                              max_nfev=iterations).x)
