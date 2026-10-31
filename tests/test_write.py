@@ -828,12 +828,268 @@ def test_a_pyamares_prior_basic_wrote_is_detected_as_pyamares(tmp_path):
     assert found['data']['names'] == list(_pyamares_peaks(path)[0])
 
 
-def _oxsa_ppm(path):
-    """Each OXSA component's expected ppm, by metabolite."""
+def _oxsa_pk(path):
+    """An OXSA prior knowledge function as preparePriorKnowledge assembles it: the function's name,
+    its header comment, the three field lists and each peak's bounds, initial values and prior
+    knowledge as dicts by field. A cell is a name ('...'), [] (None), [lo,hi] (a list) or a number.
+    Checks the file's form: one function named as its file, returning
+    AMARES.priorKnowledge.preparePriorKnowledge(fields, values)."""
     import re
-    blocks = open(path).read().split('c = struct();')[1:]
-    return {re.search(r"c\.metab\s*=\s*'([^']+)'", b).group(1):
-            float(re.search(r'c\.ppmExpected\s*=\s*([-0-9.eE+]+)', b).group(1)) for b in blocks}
+    lines = open(path).read().splitlines()
+    head = re.fullmatch(r'function pk = ([A-Za-z]\w*)\(\)', lines[0])
+    assert head and head.group(1) == os.path.splitext(os.path.basename(path))[0], lines[0]
+    comment = [l[2:] if l.startswith('% ') else '' for l in lines[1:]
+               if l.startswith('%') and not l.startswith('%%')]
+
+    def cell(text):
+        text = text.strip()
+        if text.startswith("'"):
+            return text[1:-1].replace("''", "'")
+        if text == '[]':
+            return None
+        if text.startswith('['):
+            return [float(x) for x in text[1:-1].split(',')]
+        return float(text)
+
+    def split(row):                                      # commas outside [] and ''
+        cells, depth, quoted, start = [], 0, False, 0
+        for i, ch in enumerate(row):
+            quoted ^= ch == "'"
+            depth += (ch == '[') - (ch == ']') if not quoted else 0
+            if ch == ',' and not depth and not quoted:
+                cells.append(row[start:i])
+                start = i + 1
+        return cells + [row[start:]]
+
+    fields, values, i = {}, {}, 0
+    while i < len(lines):
+        f = re.fullmatch(r'fields\.(\w+) = \{(.*)\};', lines[i])
+        v = re.fullmatch(r'values\.(\w+) = \{\.\.\.', lines[i])
+        if f:
+            fields[f.group(1)] = [cell(c) for c in split(f.group(2))]
+        elif v:
+            rows = []
+            i += 1
+            while lines[i] != '};':
+                assert lines[i].endswith(';'), lines[i]
+                rows.append([cell(c) for c in split(lines[i][:-1])])
+                i += 1
+            values[v.group(1)] = rows
+        i += 1
+    assert lines[-2:] == ['pk = AMARES.priorKnowledge.preparePriorKnowledge(fields, values);', 'end']
+    arrays = {'Bounds': 'boundsCellArray', 'IV': 'IVCellArray', 'PK': 'PKCellArray'}
+    assert all(len(r) == len(fields[k]) for k, a in arrays.items() for r in values[a])
+    peaks = [{'B': dict(zip(fields['Bounds'], b)), 'IV': dict(zip(fields['IV'], iv)),
+              'PK': dict(zip(fields['PK'], pk))}
+             for b, iv, pk in zip(*(values[a] for a in arrays.values()))]
+    return head.group(1), comment, fields, peaks
+
+
+def _oxsa_check_constraints(peaks):
+    """checkConstraints.m's rules (5-59), and initializeOptimization's (41-46: a group's peaks with
+    bounds stand together). Returns the free parameters as initializeOptimization counts them."""
+    import re
+    names = [p['B']['peakName'] for p in peaks]
+    assert all(p['IV']['peakName'] == p['PK']['peakName'] == p['B']['peakName'] for p in peaks)
+    assert len(set(names)) == len(names) and all(re.fullmatch(r'[A-Za-z]\w{0,62}', n) for n in names)
+    free = []
+    for field in peaks[0]['B']:
+        if field == 'peakName':
+            continue
+        group = 0
+        for k, p in enumerate(peaks, 1):
+            bound = p['B'][field]
+            if bound is None:
+                continue
+            assert len(bound) == 2 and bound[0] < bound[1], (p['B']['peakName'], field, bound)
+            value = p['IV'][field] if field in p['IV'] else p['PK'][field]
+            assert bound[0] <= value <= bound[1], (p['B']['peakName'], field, value, bound)
+            g = p['PK'].get('G_' + field)
+            if g is not None and g == group:
+                continue
+            group = g if g is not None else group
+            free.append((k, field))
+    for field in ('G_linewidth', 'G_amplitude', 'G_phase', 'G_chemShiftDelta', 'G_sigma'):
+        numbers = [p['PK'].get(field) for p in peaks]
+        for g in set(n for n in numbers if n is not None):
+            assert numbers.index(g) + 1 == g, (field, g)
+            members = [k for k, n in enumerate(numbers, 1) if n == g]
+            with_bounds = [k for k in members if peaks[k - 1]['B'].get(field[2:]) is not None]
+            between = [k for k in range(members[0], members[-1] + 1) if k not in members and
+                       peaks[k - 1]['B'].get(field[2:]) is not None]
+            assert not (with_bounds and between), (field, g, between)
+    return free
+
+
+def _oxsa_model(peaks, move=None):
+    """Each peak's parameters as createModelConstraints.m and applyModelConstraints.m make them
+    from the free ones (here their initial values, plus `move` for row 1's), for the fields the
+    writer uses: a free parameter is a peak's own where its bounds are given; a group (G_*) takes
+    its first peak's; a peak in a multiplet with a ratio has its amplitude times amplitudeRatio
+    (108-128); RelPhase adds degrees to the phase (139-142), base_linewidth Hz to the linewidth
+    (99-101); empty bounds and no group fix a parameter at its initial value (46-64)."""
+    move = move or {}
+    out = []
+    for k, p in enumerate(peaks, 1):
+        q = {}
+        for field in ('chemShift', 'linewidth', 'amplitude', 'phase', 'sigma'):
+            if field not in p['IV']:
+                q[field] = 0.0
+                continue
+            g = p['PK'].get('G_' + field) if field != 'chemShift' else None
+            lead = peaks[int(g) - 1] if g is not None else p
+            if field == 'sigma' and g is not None and p['B']['sigma'] is None:
+                q[field] = 0.0                  # a sigma group's peak needs bounds of its own (157)
+            elif lead['B'].get(field) is not None:
+                q[field] = lead['IV'][field] + ((g or k) == 1) * move.get(field, 0.0)
+            else:
+                q[field] = p['IV'][field]
+        if p['PK']['multiplet'] is not None and p['PK']['amplitudeRatio'] is not None:
+            q['amplitude'] *= p['PK']['amplitudeRatio']
+        q['phase'] += p['PK']['RelPhase'] or 0.0
+        q['linewidth'] += p['PK'].get('base_linewidth') or 0.0
+        q['name'], q['group'] = p['PK']['peakName'], p['PK']['G_amplitude']
+        out.append(q)
+    return out
+
+
+def _oxsa_fid(params, n, sw, mhz):
+    """makeModelFid.m: each peak amplitude exp(i phase pi / 180) exp(-|t| linewidth pi)
+    exp(-2 pi^2 t^2 sigma^2) exp(i 2 pi t chemShift imagingFrequency), summed; t = k / sw."""
+    import numpy as np
+    t = np.arange(n) / sw
+    return sum(q['amplitude'] * np.exp(1j * np.radians(q['phase']))
+               * np.exp(-np.pi * q['linewidth'] * t) * np.exp(-2 * np.pi ** 2 * t ** 2 * q['sigma'] ** 2)
+               * np.exp(2j * np.pi * t * q['chemShift'] * mhz) for q in params)
+
+
+def _oxsa_groups(params):
+    groups = {}
+    for q in params:
+        groups.setdefault(params[int(q['group']) - 1]['name'], []).append(q)
+    return groups
+
+
+def test_oxsa_gets_a_prior_knowledge_function_in_oxsa_s_own_form(tmp_path):
+    """OXSA fits each peak as amplitude exp(i phase) exp(-|t| linewidth pi) exp(-2 pi^2 t^2 sigma^2)
+    exp(i 2 pi t chemShift MHz) (makeModelFid.m): a basis' line c exp(2 pi i f t) is a peak at
+    chemShift = ppm - 4.65, the carrier, with phase +angle(c) in degrees, the basis' own sign, and
+    the set's Voigt (2 Hz Lorentzian, 3 Hz Gaussian) is linewidth 2 Hz and sigma 3 / 2.3548. The
+    prior is PK_<set>.m returning AMARES.priorKnowledge.preparePriorKnowledge(fields, values) with
+    OXSA's fields, and checkConstraints' rules hold. Each metabolite's lines are rows tied to its
+    largest: amplitude by amplitudeRatio in one-component multiplets of its G_amplitude group, phase
+    by G_phase 1 and RelPhase, linewidth by G_linewidth 1 (a hump's own widths by base_linewidth),
+    sigma by G_sigma; chemical shifts fixed. OXSA's model of the rows gives back each function from
+    its second point to the criterion; with VeSPA's phase sign it would not. Moving row 1's
+    linewidth and phase moves every metabolite alike. The jMRUI MM is left out and named."""
+    import re
+    import numpy as np
+    from writers.lines import TOL
+    basis, known = _voigt_set()
+    sw, sf, n = 4000.0, 123.2618, 2048
+    t = np.arange(n) / sw
+    steps = []
+    path = write_basis(basis, 'oxsa', 'default', str(tmp_path), te=35.0,
+                       progress=lambda text, sub=None: steps.append((text, sub)))[0]
+    assert os.path.basename(path) == 'PK_basis.m'
+    name, comment, fields, peaks = _oxsa_pk(path)
+    assert fields == {
+        'Bounds': ['peakName', 'chemShift', 'linewidth', 'amplitude', 'phase', 'chemShiftDelta',
+                   'amplitudeRatio', 'sigma'],
+        'IV': ['peakName', 'chemShift', 'linewidth', 'amplitude', 'phase', 'sigma'],
+        'PK': ['peakName', 'multiplet', 'chemShiftDelta', 'amplitudeRatio', 'G_linewidth',
+               'G_amplitude', 'G_phase', 'RelPhase', 'G_chemShiftDelta', 'refPeak', 'base_linewidth',
+               'G_sigma']}
+    free = _oxsa_check_constraints(peaks)
+    params = _oxsa_model(peaks)
+    groups = _oxsa_groups(params)
+    assert list(groups) == ['Cr', 'Gly', 'Known', 'Cr391', 'MM09']           # the reference first
+    assert [q['name'] for q in groups['Known']] == ['Known', 'Known_2', 'Known_3', 'Known_4']
+    assert free == [(1, 'linewidth')] + [(k, 'amplitude') for k in (1, 2, 3, 7, 8)] + \
+        [(1, 'phase'), (1, 'sigma')]
+    assert all(p['B']['chemShift'] is None for p in peaks)                   # shifts fixed
+    assert all(p['PK']['G_phase'] == 1 and p['PK']['G_linewidth'] == 1 for p in peaks)
+    assert peaks[0]['B']['phase'] == [0.0, 360.0] and peaks[0]['B']['amplitude'] == [0.0, np.inf]
+    assert peaks[0]['PK']['refPeak'] == 1 and all(p['PK']['refPeak'] == 0 for p in peaks[1:])
+    assert all(p['PK']['multiplet'] == 1 and p['B']['amplitude'] is None and
+               p['PK']['G_amplitude'] == 3 for p in peaks[3:6])              # Known_2-4
+
+    source = {b['name']: b for b in basis}
+    for group, members in groups.items():
+        want = source[group]['fid']
+        got = _oxsa_fid(members, n, sw, sf)
+        assert np.linalg.norm((got - want)[1:]) <= 1.1 * TOL * np.linalg.norm(want[1:]), group
+    vespa = [dict(q, phase=-q['phase']) for q in groups['Known']]          # VeSPA's sign
+    assert np.linalg.norm((_oxsa_fid(vespa, n, sw, sf) - source['Known']['fid'])[1:]) > \
+        0.1 * np.linalg.norm(source['Known']['fid'][1:])
+
+    k = sorted(groups['Known'], key=lambda q: q['chemShift'])               # 1.27, 1.35, 3.027, 3.913
+    assert np.allclose([q['chemShift'] + 4.65 for q in k], np.sort(known[:, 0]), atol=0.001)
+    assert np.allclose([q['amplitude'] for q in k], [1.4, 1.5, 3.0, 0.7], rtol=0.001)
+    assert np.allclose([(q['phase'] + 180) % 360 - 180 for q in k], [-20.0, 10.0, 0.0, 40.0], atol=0.5)
+    assert all(np.isclose(q['linewidth'], 2.0, rtol=1e-3) and
+               np.isclose(q['sigma'], 3.0 / (2 * np.sqrt(2 * np.log(2))), rtol=1e-3) for q in k)
+    assert np.allclose(sorted(q['linewidth'] for q in groups['MM09']), [30.0, 45.0], atol=1e-3)
+    assert all(q['sigma'] == 0 for q in groups['MM09'])
+
+    moved = _oxsa_groups(_oxsa_model(peaks, move={'linewidth': 3.0, 'phase': 30.0}))
+    for group, members in groups.items():
+        before, after = _oxsa_fid(members, n, sw, sf), _oxsa_fid(moved[group], n, sw, sf)
+        want = before * np.exp(1j * np.radians(30.0) - np.pi * 3.0 * t)
+        assert np.allclose(after, want, atol=1e-9 * np.abs(before).max()), group
+
+    text = ' '.join(' '.join(comment).split())
+    assert name == 'PK_basis' and 'pk = PK_basis();' in text and 'AMARES.amaresFit(' in text
+    assert "'imagingFrequency', 123.2618" in text and 'relative to the carrier, 4.65 ppm' in text
+    assert 'TE 35 ms' in text and 'Free: 8 parameters' in text
+    assert 'Left out (approximated by nothing): MM:' in text
+    listed = text.split('the amount of the basis function): ')[1].split('. ')[0]
+    totals = {g: float(v) for g, v in re.findall(r'(\w+) \d+(?:-\d+)? ([0-9.]*[0-9])', listed)}
+    for group, members in groups.items():
+        assert np.isclose(totals[group], sum(q['amplitude'] for q in members), rtol=1e-8), group
+    assert [s for s, _ in steps][-1] == 'Lines 6/6: MM' and 'left out' in steps[-1][1]
+
+
+def test_oxsa_prior_of_the_jmrui_sample_rebuilds_each_metabolite(tmp_path):
+    """The jMRUI sample as OXSA reads it: PK_JMRUI.m, 22 metabolites (MM left out, MM09 as its 10 Hz
+    peak), each rebuilt from its second point by OXSA's model of its rows to the criterion; sI's
+    largest line is row 1; NAA's first row is its 2.008 ppm line, -2.642 from the carrier, 29.62 at
+    -3.22 degrees; 24 free parameters: 22 amplitudes, one linewidth and one phase."""
+    import numpy as np
+    from writers.lines import TOL
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f) for f in sorted(os.listdir(folder))], 'jMRUI .txt')
+    path = write_basis(basis, 'oxsa', 'default', str(tmp_path))[0]
+    assert os.path.basename(path) == 'PK_JMRUI.m'
+    name, comment, fields, peaks = _oxsa_pk(path)
+    free = _oxsa_check_constraints(peaks)
+    groups = _oxsa_groups(_oxsa_model(peaks))
+
+    source = {b['name']: b for b in basis}
+    assert len(groups) == 22 and set(groups) == set(source) - {'MM'} and list(groups)[0] == 'sI'
+    for group, members in groups.items():
+        core = source[group]
+        got = _oxsa_fid(members, len(core['fid']), core['sw'], core['sf'])
+        want = core['fid']
+        assert np.linalg.norm((got - want)[1:]) <= 1.1 * TOL * np.linalg.norm(want[1:]), group
+    naa = groups['NAA'][0]
+    assert abs(naa['chemShift'] + 2.642) < 1e-3 and abs(naa['amplitude'] - 29.62) < 0.01
+    assert abs((naa['phase'] + 180) % 360 - 180 + 3.22) < 0.01 and np.isclose(naa['linewidth'], 1.0)
+    assert len(groups['MM09']) == 1 and np.isclose(groups['MM09'][0]['linewidth'], 10.0, rtol=1e-6)
+    assert len(free) == 24 and 'Free: 24 parameters' in ' '.join(' '.join(comment).split())
+
+
+def test_no_prior_writer_reads_peaks_off_the_spectrum_at_literature_shifts():
+    """The priors are the basis set's own lines (write_vespa.vespa_lines): the FFT peak picking at
+    literature shifts that OXSA last used is gone from the writers."""
+    import writers
+    import writers.write_vespa as write_vespa
+    folder = os.path.dirname(writers.__file__)
+    for helper in ('_peaks_at_ppms', '_fft_peaks', 'PPM_CALIB'):
+        assert not hasattr(write_vespa, helper), helper
+        for f in os.listdir(folder):
+            if f.endswith('.py'):
+                assert helper not in open(os.path.join(folder, f)).read(), (f, helper)
 
 
 def test_prior_writers_keep_a_stated_centre(tmp_path):
@@ -851,16 +1107,8 @@ def test_prior_writers_keep_a_stated_centre(tmp_path):
             if tool == 'pyamares':
                 ppm = _pyamares_peaks(path)[0]['NAA']['freq'] / naa['sf']
             else:
-                ppm = _oxsa_ppm(path)['NAA']
+                ppm = _oxsa_groups(_oxsa_model(_oxsa_pk(path)[3]))['NAA'][0]['chemShift'] + 4.65
             assert abs(ppm - 2.008) < 0.01, (tool, label, ppm)
-
-
-def test_oxsa_lists_each_metabolite_where_it_is_strongest(tmp_path):
-    """OXSA gets one component per metabolite: lactate's is its 1.31 ppm doublet, not the quartet."""
-    lac = load_basis([os.path.join(SAMPLES, 'JMRUI', 'Lac.txt')], 'jMRUI .txt')
-    path = write_basis(lac, 'oxsa', 'default', str(tmp_path))[0]
-
-    assert abs(_oxsa_ppm(path)['Lac'] - 1.31) < 0.03
 
 
 def test_raw_files_keep_the_echo_time(tmp_path):
@@ -985,12 +1233,14 @@ def test_a_ppmcalib_is_not_taken_as_the_centre(tmp_path):
         outdir = tmp_path / f'{tool}_{basis[0]["source"].split(".")[-1]}'
         outdir.mkdir()
         path = write_basis(basis, tool, 'default', str(outdir))[0]
-        lines = [l for l in open(path).read().splitlines() if os.sep not in l and
+        lines = [l for l in open(path).read().splitlines() if os.sep not in l and 'PK_' not in l and
                  not any(w in l.lower() for w in ('source', 'date', 'time', 'created', 'generated'))]
         return [re.sub(number, '#', l) for l in lines], [float(x) for l in lines for x in re.findall(number, l)]
     for tool in ('vespa_analysis', 'midas', 'gava', 'oxsa'):
         (text, values), (text_j, values_j) = priors(marss, tool), priors(_jmrui(), tool)
-        assert text == text_j and np.allclose(values, values_j, rtol=1e-6, atol=1e-9), tool
+        # OXSA's RelPhase is the difference of two phases each written to 6 decimals
+        assert text == text_j and np.allclose(values, values_j, rtol=1e-6,
+                                              atol=1e-5 if tool == 'oxsa' else 1e-9), tool
 
 
 def _osprey(basis, tmp_path):

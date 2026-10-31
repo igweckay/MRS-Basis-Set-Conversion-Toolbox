@@ -278,6 +278,22 @@ def test_screen_2_says_what_the_pyamares_prior_holds():
     assert 'dominant peak' not in body
 
 
+@pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
+def test_screen_2_says_what_the_oxsa_prior_holds():
+    run = subprocess.run([sys.executable, '-c', PYAMARES_TEXT.replace("== 'pyamares'", "== 'oxsa'")],
+                         capture_output=True, text=True, cwd=os.path.join(ROOT, 'basis_converter'))
+    if run.returncode == 3:
+        pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
+
+    assert run.returncode == 0, run.stderr
+    title, body = json.loads(run.stdout)
+    assert title == 'OXSA — prior knowledge output'
+    for said in ('PK_<set>.m', "OXSA's own form", "each metabolite's lines", 'tied',
+                 'one phase and one linewidth', 'chemical shifts', 'fixed', 'AMARES.amaresFit'):
+        assert said in body, said
+    assert 'run_oxsa_amares.m' not in body and 'script' not in body
+
+
 WRITTEN_FOR_OSPREY = """
 import os
 import sys

@@ -55,9 +55,8 @@ VeSPA prior format:
 
 vespa_lines fits the set once and gives these lines; write_gava and write_midas write the same
 lines, as VeSPA-Simulation writes its simulation's lines to all three formats, and write_pyamares
-ties them as PyAMARES sub-peaks (with the humps' own components, which an AMARES peak can hold).
-The literature table is used here for spins only; the peak helpers below are OXSA's (write_oxsa
-imports them).
+and write_oxsa tie them as AMARES peaks (with the humps' own components, which an AMARES peak can
+hold). The literature table is used here for spins only.
 """
 
 import os
@@ -74,7 +73,7 @@ from writers.lines import (MAX_LINES, TOL, decompose, fit_lines, fwhm, is_hump,
 
 ############## Literature chemical shift table (from metabList.mat) #############
 # One entry per spin of metabList's spin system (a methyl is one). write_vespa counts them
-# for <spins>; write_oxsa looks for peaks at them.
+# for <spins>.
 # Loaded dynamically from metabList.mat if available, otherwise uses hardcoded
 # values from the working marss_to_vespa_basis.xml
 
@@ -113,8 +112,6 @@ METAB_PPM_TABLE = {
     'Tau'     : [3.421, 3.421, 3.246, 3.246],
     'NAAG'    : [2.042, 4.128, 1.881, 2.049, 2.190, 4.607, 2.721, 2.519],
 }
-
-PPM_CALIB = 4.65   # the centre the set is read at (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
 
 
 ############## Main entry point #############
@@ -302,7 +299,7 @@ def _describe(shape):
                    ', which differ by more than 2 %'))
 
 
-############## Helpers (the OXSA writer imports these) #############
+############## Helpers: spins from metabList #############
 
 def _load_metablist(path):
     """Load PPM table from metabList.mat — returns dict of name → [(ppm, n_protons), ...]"""
@@ -404,123 +401,6 @@ def _get_lit_ppms(name, table):
         if key in METAB_PPM_TABLE:
             return [(p, 1) for p in METAB_PPM_TABLE[key]]
     return []
-
-
-def _peaks_at_ppms(fid, sf, sw, lit_lines, ppm_calib=PPM_CALIB):
-    """
-    Get spectral amplitude and phase at specific PPM positions.
-    Uses the literature PPM as the peak location, reads amplitude
-    and phase from the FFT spectrum at that position.
-    """
-    fid   = np.asarray(fid).ravel()
-    n     = len(fid)
-    freq  = np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / sw))
-    ppm   = ppm_calib + freq / sf
-    spec  = np.fft.fftshift(np.fft.fft(fid))
-
-    # Extract just ppm values for phase correction reference
-    lit_ppms_only = [p for p, n in lit_lines] if lit_lines else []
-
-    # Find best zero-order phase by maximising the real part of the
-    # dominant peak — search over 720 steps for fine resolution
-    if lit_ppms_only:
-        ref_ppm  = lit_ppms_only[0]
-        win_mask = (ppm >= ref_ppm - 0.4) & (ppm <= ref_ppm + 0.4)
-    else:
-        win_mask = (ppm >= 0.5) & (ppm <= 4.3)
-
-    best_phi, best_max = 0.0, -np.inf
-    for phi_deg in np.linspace(0, 360, 721):
-        sr = np.real(spec * np.exp(1j * np.radians(phi_deg)))
-        mx = np.max(sr[win_mask]) if np.any(win_mask) else 0.0
-        if mx > best_max:
-            best_max = mx
-            best_phi = np.radians(phi_deg)
-
-    spec_phased = spec * np.exp(1j * best_phi)
-
-    # Use lit_ppms if available, else detect peaks
-    if lit_lines:
-        peaks = []
-
-        for p, n_prot in lit_lines:
-            if p >= 90:
-                continue
-
-            idx = np.argmin(np.abs(ppm - p))
-
-            # Sample real spectrum in a narrow window around lit ppm
-            # Use absolute value to handle negative peaks (dispersive components)
-            half_bins = max(2, int(round(n / (sw / sf) * 0.05)))
-            i0 = max(0, idx - half_bins)
-            i1 = min(n - 1, idx + half_bins)
-
-            win_r   = np.real(spec_phased[i0:i1+1])
-            win_c   = spec_phased[i0:i1+1]
-            win_ppm = ppm[i0:i1+1]
-
-            if len(win_r) > 0:
-                # Use abs to find peak even if phasing isn't perfect at this position
-                best_idx = np.argmax(np.abs(win_r))
-                area     = float(win_r[best_idx])
-                ph       = float(np.degrees(np.angle(win_c[best_idx])))
-                ppm_loc  = float(win_ppm[best_idx])
-            else:
-                area    = float(np.real(spec_phased[idx]))
-                ph      = float(np.degrees(np.angle(spec_phased[idx])))
-                ppm_loc = float(ppm[idx])
-
-            # Keep the peak even if area is small — preserve TE modulation.
-            # Shifts that land on a peak already listed are that peak again:
-            # VeSPA adds up every line, so it is listed once, with its area once.
-            if any(p_in == round(ppm_loc, 6) for p_in, _, _ in peaks):
-                continue
-            peaks.append((round(ppm_loc, 6), area, round(ph, 6)))
-
-        # Normalize to dominant peak = 1.0 using absolute areas
-        if peaks:
-            max_abs = max(abs(a) for _, a, _ in peaks)
-            if max_abs > 0:
-                peaks = [(p, round(a / max_abs, 12), ph) for p, a, ph in peaks]
-
-        # Sort by absolute area descending, keep positive peaks
-        peaks.sort(key=lambda x: -abs(x[1]))
-        peaks = [(p, a, ph) for p, a, ph in peaks if a > 0]
-        return peaks
-
-    # Fallback: FFT peak detection
-    return _fft_peaks(ppm, spec_phased, spec_phased)
-
-
-def _fft_peaks(ppm, spec_phased, spec_complex,
-               ppm_min=0.5, ppm_max=4.3, min_frac=0.05, max_peaks=20):
-    """Fallback: detect peaks from FFT."""
-    mask   = (ppm >= ppm_min) & (ppm <= ppm_max)
-    ppm_m  = ppm[mask]
-    spec_m = np.real(spec_phased[mask])
-    sc_m   = spec_complex[mask]
-
-    if len(spec_m) == 0 or np.max(spec_m) <= 0:
-        return []
-
-    threshold = np.max(spec_m) * min_frac
-    peaks = []
-
-    for i in range(1, len(spec_m) - 1):
-        if spec_m[i] > spec_m[i-1] and \
-           spec_m[i] > spec_m[i+1] and \
-           spec_m[i] > threshold:
-            y0, y1, y2 = spec_m[i-1], spec_m[i], spec_m[i+1]
-            denom  = 2.0 * (y0 - 2.0 * y1 + y2)
-            delta  = (y0 - y2) / denom if denom != 0 else 0.0
-            dp     = abs(ppm_m[1] - ppm_m[0]) if len(ppm_m) > 1 else 0.0
-            p_loc  = float(ppm_m[i] - delta * dp)
-            area   = float(y1)
-            phase  = float(np.degrees(np.angle(sc_m[i])))
-            peaks.append((round(p_loc, 6), round(area, 12), round(phase, 6)))
-
-    peaks.sort(key=lambda x: -x[1])
-    return peaks[:max_peaks]
 
 
 ############## Command line #############

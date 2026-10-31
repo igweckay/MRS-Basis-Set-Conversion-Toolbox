@@ -265,11 +265,13 @@ class Screen2Output(BaseScreen):
         # Tools that generate scripts/priors rather than basis set files
         INFO_TOOLS = {
             'oxsa': (
-                "OXSA — MATLAB script output",
-                "Selecting OXSA will produce a pre-configured run_oxsa_amares.m "
-                "script with your metabolite names, PPM positions, linewidth bounds "
-                "and relative amplitudes already filled in from your basis set. "
-                "Open the script in MATLAB, set your OXSA path and subject file, and run."
+                "OXSA — prior knowledge output",
+                "Selecting OXSA will produce PK_<set>.m, a prior knowledge function in "
+                "OXSA's own form, with each metabolite's lines from the basis set tied to "
+                "its largest one, and one phase and one linewidth for the whole set: only "
+                "the amplitudes are free for each metabolite. OXSA cannot tie chemical "
+                "shifts, so they are fixed: align the data to the basis set first. The "
+                "file's header shows the AMARES.amaresFit call."
             ),
             'vespa_analysis': (
                 "VeSPA Analysis — prior XML output",
