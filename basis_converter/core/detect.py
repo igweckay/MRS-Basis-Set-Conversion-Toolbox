@@ -835,7 +835,7 @@ def _try_pyamares(path):
                 'sf'    : None,
                 'n'     : None,
                 'Bo'    : None,
-                # Pass through peak params for write_oxsa
+                # the peaks, for screen 1's peak list (a CSV holds no FIDs to convert)
                 'peak_params': result,
             },
             'missing': [],

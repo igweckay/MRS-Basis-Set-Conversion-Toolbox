@@ -89,10 +89,10 @@ FORMAT_TOOLS = {
         'ProFit',
     ],
 
-    ############## PyAMARES / OXSA #############
+    ############## PyAMARES #############
+    # OXSA reads its own PK_<set>.m (writers/write_oxsa.py), not a PyAMARES CSV
     'PyAMARES .csv': [
         'PyAMARES',
-        'OXSA',
     ],
 
     ############## VeSPA #############
@@ -219,7 +219,7 @@ GENERATOR_TOOLS = [
 PEAK_FITTING_TOOLS = [
     {'id': 'pyamares', 'name': 'PyAMARES', 'ext': '.csv priors',  'dimmed': False, 'formats': []},
     {'id': 'vespa_analysis', 'name': 'VeSPA Analysis', 'ext': '.xml priors', 'dimmed': False, 'formats': []},
-    {'id': 'oxsa',     'name': 'OXSA',     'ext': '.m script',    'dimmed': False, 'formats': []},
+    {'id': 'oxsa',     'name': 'OXSA',     'ext': '.m priors',    'dimmed': False, 'formats': []},
 ]
 
 ALL_TOOLS = FITTING_TOOLS + GENERATOR_TOOLS + PEAK_FITTING_TOOLS

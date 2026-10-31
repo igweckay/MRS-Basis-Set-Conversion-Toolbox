@@ -262,23 +262,26 @@ class Screen2Output(BaseScreen):
         for c in card.winfo_children():
             c.config(bg="#dbeafe")
 
-        # Tools that generate scripts/priors rather than basis set files
+        # Tools that get a prior knowledge file rather than basis set files
         INFO_TOOLS = {
             'oxsa': (
                 "OXSA — prior knowledge output",
                 "Selecting OXSA will produce PK_<set>.m, a prior knowledge function in "
                 "OXSA's own form, with each metabolite's lines from the basis set tied to "
                 "its largest one, and one phase and one linewidth for the whole set: only "
-                "the amplitudes are free for each metabolite. OXSA cannot tie chemical "
-                "shifts, so they are fixed: align the data to the basis set first. The "
-                "file's header shows the AMARES.amaresFit call."
+                "the amplitudes are free for each metabolite. Broad humps are their own "
+                "components, or left out and named in the file where these do not rebuild "
+                "them. OXSA cannot tie chemical shifts, so they are fixed: align the data "
+                "to the basis set first. The file's header shows the AMARES.amaresFit call."
             ),
             'vespa_analysis': (
                 "VeSPA Analysis — prior XML output",
-                "Selecting VeSPA Analysis will produce a VIFF XML prior file "
-                "loadable via 'Basis Set from File' in VeSPA Analysis. "
-                "Peak positions are taken from literature chemical shifts "
-                "and areas from the simulated FID at your echo time."
+                "Selecting VeSPA Analysis will produce a VIFF XML prior file for the Voigt "
+                "tab's 'Basis Set from File...', with each metabolite's lines fitted from "
+                "the basis set (ppm, area and phase), the areas on the source's scale; "
+                "VeSPA's fit adds the lineshape. Broad humps (macromolecules, lipids) are "
+                "left out and named in the file: model them with VeSPA's own macromolecule "
+                "model."
             ),
             'pyamares': (
                 "PyAMARES — CSV prior output",
@@ -286,21 +289,29 @@ class Screen2Output(BaseScreen):
                 "each metabolite's lines from the basis set tied to its largest one, "
                 "and one phase, one lineshape and one shift for the whole set on the "
                 "largest singlet's peak: only the amplitudes are free for each "
-                "metabolite. Fit with the MHz, carrier and deadtime its first line "
-                "states, and truncate_initial_points=1 where the data's first point "
-                "is not the FID at t = 0. The fit takes minutes; lmfit's uncertainty "
-                "step after it takes hours for the many tied peaks."
+                "metabolite. Broad humps are their own components, or left out and named "
+                "in the file where these do not rebuild them. Fit with the MHz, carrier "
+                "and deadtime its first line states, and truncate_initial_points=1 where "
+                "the data's first point is not the FID at t = 0. The fit takes minutes; "
+                "lmfit's uncertainty step after it takes hours for the many tied peaks."
             ),
             'midas': (
                 "MIDAS — prior XML output",
-                "Selecting MIDAS will produce a FITT_Generic_XML prior file "
-                "compatible with the MIDAS FITT2 application. "
-                "Peak positions and relative areas are derived from the basis set."
+                "Selecting MIDAS will produce a FITT_Generic_XML prior file for MIDAS's "
+                "FITT2, as VeSPA-Simulation exports one, with the VeSPA prior's lines: "
+                "each metabolite's lines fitted from the basis set (ppm, area and phase), "
+                "the areas on the source's scale; the fit adds the lineshape. Broad humps "
+                "are left out and named in the file: model them with the fit's own "
+                "macromolecule or baseline model."
             ),
             'gava': (
                 "GAVA — text prior output",
-                "Selecting GAVA will produce a tab-separated text prior file "
-                "with metabolite peak positions and areas from the basis set."
+                "Selecting GAVA will produce a tab-separated text prior file, as "
+                "VeSPA-Simulation exports one, with the VeSPA prior's lines: each "
+                "metabolite's lines fitted from the basis set (ppm, area and phase), the "
+                "areas on the source's scale; the fit adds the lineshape. Broad humps are "
+                "left out and named in the file: model them with the fit's own "
+                "macromolecule or baseline model."
             ),
         }
 

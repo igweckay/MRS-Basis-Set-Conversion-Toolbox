@@ -2,9 +2,8 @@
 readers/read_pyamares.py
 Basis Set Converter — PyAMARES prior knowledge CSV reader
 
-Reads a PyAMARES prior knowledge CSV file into a peak params dict.
-This dict can then be passed to write_oxsa() to produce an OXSA
-MATLAB struct, or used for inspection/display.
+Reads a PyAMARES prior knowledge CSV file into a peak params dict, which core.detect hands
+to screen 1's peak list. A CSV holds peaks, not FIDs, so it is not converted to another format.
 
 PyAMARES CSV format (from generate_pyamares_pk_from_basis.py):
 

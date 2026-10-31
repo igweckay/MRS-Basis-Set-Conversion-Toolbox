@@ -566,6 +566,39 @@ def test_gava_and_midas_state_the_echo_time_and_report_each_metabolite(tmp_path)
         assert steps == ["Lineshape of the set's lines", 'Lines 1/2: NAA', 'Lines 2/2: Cr391'], tool
 
 
+def test_gava_and_midas_name_the_source_file_without_its_folders(tmp_path):
+    """The GAVA and MIDAS headers name the file the set came from, not its full path, which would
+    show the user's folders in a file they may share."""
+    import xml.etree.ElementTree as ET
+    for tool in ('gava', 'midas'):
+        (tmp_path / tool).mkdir()
+        path = write_basis(_jmrui(), tool, 'default', str(tmp_path / tool))[0]
+        if tool == 'gava':
+            header = [line[1:] for line in open(path).read().split('\n') if line.startswith(';')]
+        else:
+            header = [c.get('value') for c in ET.parse(path).getroot().iter('comment')]
+
+        assert 'Source: NAA.txt' in header, tool
+        assert SAMPLES not in open(path).read() and 'sample_basis_sets' not in open(path).read(), tool
+
+
+def test_the_tool_lists_say_what_oxsa_gets_and_reads():
+    """OXSA gets a PK_<set>.m prior knowledge function (write_oxsa), not a script, and reads that,
+    not a PyAMARES CSV: the PyAMARES peaks handed to write_oxsa are gone, from the code and from
+    what it says."""
+    from core.formats import ALL_TOOLS, get_compatible_tools
+    assert next(t for t in ALL_TOOLS if t['id'] == 'oxsa')['ext'] == '.m priors'
+    assert get_compatible_tools('PyAMARES .csv') == ['PyAMARES']
+    texts = {name: open(os.path.join(ROOT, name), encoding='utf-8').read()
+             for name in ('README.md', 'basis_converter/readers/read_pyamares.py',
+                          'basis_converter/core/detect.py', 'basis_converter/core/load.py',
+                          'basis_converter/core/formats.py', 'basis_converter/screen2_output.py')}
+    for name, text in texts.items():
+        for stale in ('write_oxsa()', 'for write_oxsa', 'convert to OXSA', '.m script',
+                      'run_oxsa_amares', 'literature chemical shifts', 'relative areas'):
+            assert stale not in text, (name, stale)
+
+
 def _pyamares_peaks(path, move=None):
     """The peaks of a PyAMARES prior as PyAMARES evaluates them (kernel/PriorKnowledge.py 0.3.28),
     in its internal units: ak, freq (Hz), dk (pi * Hz), phi (radians) and g. A number cell is in

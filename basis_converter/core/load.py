@@ -84,7 +84,7 @@ def load_basis(files, fmt, sw=None, sf=None):
 
     if 'PyAMARES' in fmt:
         from readers.read_pyamares import read_pyamares
-        # PyAMARES CSV doesn't contain FIDs — can only convert to OXSA
+        # A PyAMARES CSV holds peaks, not FIDs: nothing to convert
         raise RuntimeError(
             "PyAMARES CSV contains prior knowledge only, not FIDs. "
             "Cannot convert to FID-based formats."

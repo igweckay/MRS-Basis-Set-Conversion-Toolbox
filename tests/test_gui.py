@@ -273,7 +273,8 @@ def test_screen_2_says_what_the_pyamares_prior_holds():
     title, body = json.loads(run.stdout)
     assert title == 'PyAMARES — CSV prior output'
     for said in ("each metabolite's lines", 'tied', 'one phase, one lineshape and one shift',
-                 'largest singlet', 'carrier', 'truncate_initial_points=1', 'uncertainty'):
+                 'largest singlet', 'Broad humps', 'left out', 'carrier',
+                 'truncate_initial_points=1', 'uncertainty'):
         assert said in body, said
     assert 'dominant peak' not in body
 
@@ -289,9 +290,35 @@ def test_screen_2_says_what_the_oxsa_prior_holds():
     title, body = json.loads(run.stdout)
     assert title == 'OXSA — prior knowledge output'
     for said in ('PK_<set>.m', "OXSA's own form", "each metabolite's lines", 'tied',
-                 'one phase and one linewidth', 'chemical shifts', 'fixed', 'AMARES.amaresFit'):
+                 'one phase and one linewidth', 'Broad humps', 'left out', 'chemical shifts',
+                 'fixed', 'AMARES.amaresFit'):
         assert said in body, said
     assert 'run_oxsa_amares.m' not in body and 'script' not in body
+
+
+@pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
+def test_screen_2_says_what_the_vespa_gava_and_midas_priors_hold():
+    """VeSPA's prior, and GAVA and MIDAS as VeSPA-Simulation exports them, hold each metabolite's
+    lines fitted from the basis set on the source's scale (write_vespa.vespa_lines), with the
+    broad humps left out: not literature shifts, not relative areas."""
+    for tool, title, own in (
+            ('vespa_analysis', 'VeSPA Analysis — prior XML output',
+             ("'Basis Set from File...'", "VeSPA's own macromolecule model")),
+            ('gava', 'GAVA — text prior output', ('VeSPA-Simulation', "the VeSPA prior's lines")),
+            ('midas', 'MIDAS — prior XML output', ('VeSPA-Simulation', "the VeSPA prior's lines"))):
+        run = subprocess.run([sys.executable, '-c', PYAMARES_TEXT.replace("== 'pyamares'", f"== '{tool}'")],
+                             capture_output=True, text=True, cwd=os.path.join(ROOT, 'basis_converter'))
+        if run.returncode == 3:
+            pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
+
+        assert run.returncode == 0, run.stderr
+        shown, body = json.loads(run.stdout)
+        assert shown == title
+        for said in ("each metabolite's lines fitted from the basis set", "source's scale",
+                     'lineshape', 'Broad humps', 'left out') + own:
+            assert said in body, (tool, said)
+        for stale in ('literature', 'relative areas', 'simulated FID', 'echo time'):
+            assert stale not in body, (tool, stale)
 
 
 WRITTEN_FOR_OSPREY = """
