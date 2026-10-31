@@ -24,8 +24,8 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=
     te         : float or None, echo time in ms (30 if None; 26 for OXSA)
     seq        : str or None, sequence name ('unedited' if None)
     add_mm     : bool, Osprey only: add Osprey's MM and lipids, as fit_makeBasis's addMMFlag
-    progress   : callable or None, VeSPA only: progress(text, sub) as each metabolite's lines
-                 are fitted (screen 4 lists them as steps)
+    progress   : callable or None, VeSPA, GAVA and MIDAS only: progress(text, sub) as each
+                 metabolite's lines are fitted (screen 4 lists them as steps)
 
     Returns
     -------
@@ -130,23 +130,25 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=
         write_oxsa(basis_list, out_file, seqte=float(stated_te or 26.0))
         return [out_file]
 
+    # VeSPA's priors and VeSPA-Simulation's GAVA and MIDAS exports: the echo time the
+    # functions state, else the one given
+    stated = next((float(b['te']) for b in basis_list if b.get('te')), None)
+
     if tool_id == 'midas':
         from writers.write_midas import write_midas
         out_file = os.path.join(outdir, 'midas_priors.xml')
-        write_midas(basis_list, out_file)
+        write_midas(basis_list, out_file, seqte=stated or te, progress=progress)
         return [out_file]
 
     if tool_id == 'gava':
         from writers.write_gava import write_gava
         out_file = os.path.join(outdir, 'gava_priors.txt')
-        write_gava(basis_list, out_file)
+        write_gava(basis_list, out_file, seqte=stated or te, progress=progress)
         return [out_file]
 
     if tool_id in ('vespa_analysis', 'vespa_gen2'):
         from writers.write_vespa import write_vespa
         out_file = os.path.join(outdir, 'vespa_priors.xml')
-        # the echo time the functions state, else the one given
-        stated = next((float(b['te']) for b in basis_list if b.get('te')), None)
         write_vespa(basis_list, out_file, seqte=stated or te, progress=progress)
         return [out_file]
 

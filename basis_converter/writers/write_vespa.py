@@ -53,8 +53,9 @@ VeSPA prior format:
       </prior>
     </vespa_export>
 
-The literature table and the peak helpers below are no longer used for VeSPA's lines; the
-GAVA, MIDAS and OXSA writers import them, and VeSPA uses the table for spins only.
+vespa_lines fits the set once and gives these lines; write_gava and write_midas write the same
+lines, as VeSPA-Simulation writes its simulation's lines to all three formats. The literature
+table is used here for spins only; the peak helpers below are OXSA's (write_oxsa imports them).
 """
 
 import os
@@ -71,7 +72,7 @@ from writers.lines import (MAX_LINES, TOL, decompose, fit_lines, fwhm, is_hump,
 
 ############## Literature chemical shift table (from metabList.mat) #############
 # One entry per spin of metabList's spin system (a methyl is one). write_vespa counts them
-# for <spins>; write_gava, write_midas and write_oxsa look for peaks at them.
+# for <spins>; write_oxsa looks for peaks at them.
 # Loaded dynamically from metabList.mat if available, otherwise uses hardcoded
 # values from the working marss_to_vespa_basis.xml
 
@@ -134,7 +135,6 @@ def write_vespa(basis_list, outpath,
     progress       : callable or None, progress(text, sub) once a metabolite's lines are fitted
                      or it is left out (the GUI's step list: a large set takes a while)
     """
-    basis_list = at_centre(basis_list)     # the lines' ppm are read at CENTRE
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 
@@ -159,41 +159,11 @@ def write_vespa(basis_list, outpath,
     ET.SubElement(prior, 'nucleus').text   = '1H'
     ET.SubElement(prior, 'seqte').text     = str(float(seqte))
 
-    names = [core.get('name', 'unknown') for core in basis_list]
-    decomposed = [decompose(np.asarray(core['fid']).ravel(), float(core.get('sw') or 4000.0))
-                  for core in basis_list]
-    shape = set_lineshape(basis_list, decomposed)
-    print(f"  Lineshape: {_describe(shape)}")
-    if progress:
-        progress("Lineshape of the set's lines", _describe(shape))
-
-    listed, unlisted, humps, short = [], [], [], []
-    for count, (met_name, core, parts) in enumerate(zip(names, basis_list, decomposed), 1):
-        done = f"{count}/{len(names)}: {met_name}"
-        fid      = np.asarray(core['fid']).ravel()
-        sf       = float(core.get('sf') or 123.26)
-        sw       = float(core.get('sw') or 4000.0)
-
-        if is_hump(parts, shape):
-            # no line of the set's lineshape: written as lines, VeSPA would draw sharp ones
-            print(f"  WARNING: {met_name} is a broad hump, not lines of the set's lineshape — left out")
-            humps.append(met_name)
-            if progress:
-                progress(f"Lines {done}", "left out: a broad hump, not lines of the set's lineshape")
-            continue
-        lines = fit_lines(fid, sw, shape, TOL, parts)
-        amp, freq = lines['amplitude'], lines['freq']
-        if not len(amp):
-            print(f"  WARNING: no lines for {met_name} — skipping")
-            if progress:
-                progress(f"Lines {done}", "no lines: skipped")
-            continue
-        if lines['residual'] > TOL:
-            print(f"  WARNING: {MAX_LINES} lines rebuild {met_name} to {lines['residual']:.1e} only")
-            short.append(f"{met_name} ({lines['residual']:.0e})")
-
+    found = vespa_lines(basis_list, progress)
+    listed, unlisted = [], []
+    for met_name, rows, _ in found['metabolites']:
         lit = _get_lit_ppms(met_name, ppm_table)
-        spins = int(round(sum(n for _, n in lit))) if lit else len(amp)
+        spins = int(round(sum(n for _, n in lit))) if lit else len(rows)
         (listed if lit else unlisted).append(met_name)
 
         met_elem = ET.SubElement(prior, 'prior_metabolite', version='1.0.0')
@@ -203,23 +173,18 @@ def write_vespa(basis_list, outpath,
         ET.SubElement(met_elem, 'dim').text   = '0'
         ET.SubElement(met_elem, 'spins').text = str(spins)
 
-        for c, f in zip(amp, freq):
+        for ppm, area, phase in rows:
             line = ET.SubElement(met_elem, 'line')
             ET.SubElement(line, 'group')
-            ET.SubElement(line, 'ppm').text   = f'{CENTRE + f / sf:.8f}'
-            ET.SubElement(line, 'area').text  = f'{abs(c):.10g}'
-            ET.SubElement(line, 'phase').text = f'{-np.degrees(np.angle(c)):.6f}'
+            ET.SubElement(line, 'ppm').text   = f'{ppm:.8f}'
+            ET.SubElement(line, 'area').text  = f'{area:.10g}'
+            ET.SubElement(line, 'phase').text = f'{phase:.6f}'
 
-        print(f"  {met_name:15s}  {len(amp):3d} lines  "
-              f"largest={CENTRE + freq[0] / sf:.4f} ppm  residual={lines['residual']:.1e}")
-        if progress:
-            progress(f"Lines {done}", f"{len(amp)} line{'s' * (len(amp) > 1)}, "
-                                      f"residual {lines['residual']:.1e}")
-
+    humps, short = found['humps'], found['short']
     comment.text = (
         f'Prior information from basis set with {len(basis_list)} metabolites. '
         f'Lines: each FID fitted as undamped lines times the set\'s lineshape, '
-        f'{_describe(shape)}, as VeSPA rebuilds a basis FID from its lines and applies one '
+        f'{found["lineshape"]}, as VeSPA rebuilds a basis FID from its lines and applies one '
         f'lineshape in the fit: the fewest lines found that rebuild the FID to a relative '
         f'residual of {TOL:g}; ppm, amplitude at t = 0 and phase of each. The lineshape is not '
         f'in the lines: VeSPA\'s fitted lineshape is the data\'s whole lineshape. Areas in the '
@@ -246,6 +211,72 @@ def write_vespa(basis_list, outpath,
     print(f"  {len(basis_list)} metabolites  TE={seqte} ms")
 
 
+def vespa_lines(basis_list, progress=None):
+    """
+    The lines a VeSPA prior holds for each function of a set, as VeSPA-Simulation writes them to
+    its Analysis prior and to GAVA and MIDAS alike (dialog_mixed_metabolite_output.py: all three
+    take the simulation's same ppms, areas and phases): ppm absolute, area the amplitude at
+    t = 0 on the source's scale (factor 1), phase in degrees in VeSPA's sign, each rounded as
+    the prior writes it. The set's lineshape is measured once and every function fitted once.
+
+    Returns a dict:
+        'metabolites' : [(name, [(ppm, area, phase), ...], residual)], the set's order
+        'humps'       : names left out as broad humps (no line of the set's lineshape)
+        'short'       : 'name (residual)' of those MAX_LINES lines rebuild only to that residual
+        'skipped'     : names with no lines
+        'lineshape'   : the set's lineshape in words
+    progress(text, sub), if given, is called with the lineshape and once a function.
+    """
+    basis_list = at_centre(basis_list)     # the lines' ppm are read at CENTRE
+    names = [core.get('name', 'unknown') for core in basis_list]
+    decomposed = [decompose(np.asarray(core['fid']).ravel(), float(core.get('sw') or 4000.0))
+                  for core in basis_list]
+    shape = set_lineshape(basis_list, decomposed)
+    described = _describe(shape)
+    print(f"  Lineshape: {described}")
+    if progress:
+        progress("Lineshape of the set's lines", described)
+
+    found = {'metabolites': [], 'humps': [], 'short': [], 'skipped': [], 'lineshape': described}
+    for count, (met_name, core, parts) in enumerate(zip(names, basis_list, decomposed), 1):
+        done = f"{count}/{len(names)}: {met_name}"
+        fid = np.asarray(core['fid']).ravel()
+        sf  = float(core.get('sf') or 123.26)
+        sw  = float(core.get('sw') or 4000.0)
+
+        if is_hump(parts, shape):
+            # no line of the set's lineshape: written as lines, VeSPA would draw sharp ones
+            print(f"  WARNING: {met_name} is a broad hump, not lines of the set's lineshape — left out")
+            found['humps'].append(met_name)
+            if progress:
+                progress(f"Lines {done}", "left out: a broad hump, not lines of the set's lineshape")
+            continue
+        lines = fit_lines(fid, sw, shape, TOL, parts)
+        amp, freq = lines['amplitude'], lines['freq']
+        if not len(amp):
+            print(f"  WARNING: no lines for {met_name} — skipping")
+            found['skipped'].append(met_name)
+            if progress:
+                progress(f"Lines {done}", "no lines: skipped")
+            continue
+        if lines['residual'] > TOL:
+            print(f"  WARNING: {MAX_LINES} lines rebuild {met_name} to {lines['residual']:.1e} only")
+            found['short'].append(f"{met_name} ({lines['residual']:.0e})")
+
+        # VeSPA's FID is BasiC's conjugate: the line at +f Hz is at CENTRE + f / sf ppm with
+        # phase -angle(c); rounded as the prior writes them, so every format holds one number
+        rows = [(round(CENTRE + f / sf, 8), float(f'{abs(c):.10g}'),
+                 round(-float(np.degrees(np.angle(c))), 6)) for c, f in zip(amp, freq)]
+        found['metabolites'].append((met_name, rows, lines['residual']))
+
+        print(f"  {met_name:15s}  {len(amp):3d} lines  "
+              f"largest={rows[0][0]:.4f} ppm  residual={lines['residual']:.1e}")
+        if progress:
+            progress(f"Lines {done}", f"{len(amp)} line{'s' * (len(amp) > 1)}, "
+                                      f"residual {lines['residual']:.1e}")
+    return found
+
+
 def _describe(shape):
     """The set's lineshape in words, for the prior's comment."""
     widths = {'Lorentzian': f"{shape['lorentz']:.3f} Hz", 'Gaussian': f"{shape['gauss']:.3f} Hz",
@@ -259,7 +290,7 @@ def _describe(shape):
                    ', which differ by more than 2 %'))
 
 
-############## Helpers (the GAVA, MIDAS and OXSA writers import these) #############
+############## Helpers (the OXSA writer imports these) #############
 
 def _load_metablist(path):
     """Load PPM table from metabList.mat — returns dict of name → [(ppm, n_protons), ...]"""

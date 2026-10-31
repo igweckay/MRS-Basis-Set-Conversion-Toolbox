@@ -503,6 +503,69 @@ def test_a_vespa_export_reports_each_metabolite_as_it_is_fitted(tmp_path):
     assert steps[1][1].startswith('17 lines, residual') and 'hump' in steps[3][1]
 
 
+def test_gava_and_midas_hold_the_vespa_prior_s_lines_as_vespa_simulation_writes_them(tmp_path):
+    """VeSPA-Simulation writes its simulation's same ppms, areas and phases to its Analysis prior,
+    to GAVA and to MIDAS (simulation/dialog_mixed_metabolite_output.py). So the GAVA rows and the
+    MIDAS fitt_PriorLine values of the jMRUI sample are the VeSPA prior's lines, number for
+    number: absolute ppm, areas on the set's one scale (factor 1), phases in VeSPA's sign, the
+    humps MM and MM09 left out and named. The layout is VeSPA's: GAVA's ';' comment lines ending
+    with its results heading, rows abbr, dims 0.0, the line's index from 0, ppm, area, phase,
+    tab-separated, no newline after the last; MIDAS's comments line0000 on and params numbered
+    over the file, indented with tabs by ElementTree, as VeSPA's util_xml.indent and
+    tree.write leave them."""
+    import numpy as np
+    import xml.etree.ElementTree as ET
+    basis, path = _vespa_jmrui()
+    prior, _, _ = _vespa_lines(path)
+    (tmp_path / 'gava').mkdir()
+    (tmp_path / 'midas').mkdir()
+    gava = open(write_basis(basis, 'gava', 'default', str(tmp_path / 'gava'))[0]).read()
+    midas_path = write_basis(basis, 'midas', 'default', str(tmp_path / 'midas'))[0]
+
+    header = [line for line in gava.split('\n') if line.startswith(';')]
+    rows = [line.split('\t') for line in gava.split('\n') if not line.startswith(';')]
+    assert gava.split('\n')[:len(header)] == header and not gava.endswith('\n')
+    assert header[-3:] == [';', ';Simulation Spectral Results', ';' + '-' * 75]
+    root = ET.parse(midas_path).getroot()
+    comments = root.find('VESPA_SIMULATION_MIDAS_EXPORT').findall('comment')
+    params = root.find('PRIOR_METABOLITE_INFORMATION').findall('param')
+    assert [c.get('line') for c in comments] == [f'line{i:04d}' for i in range(len(comments))]
+    assert [p.get('name') for p in params] == [f'fitt_PriorLine{i:05d}' for i in range(1, len(params) + 1)]
+    midas = [p.get('value').split('++') for p in params]
+
+    for fields in (rows, midas):
+        assert all(len(f) == 8 and f[1:4] == ['0.0', '0.0', '0.0'] for f in fields)
+        names = list(dict.fromkeys(f[0] for f in fields))
+        assert names == list(prior)
+        for name in names:
+            mine = [f for f in fields if f[0] == name]
+            assert [int(f[4]) for f in mine] == list(range(len(mine)))
+            assert np.array_equal(np.array([[float(x) for x in f[5:]] for f in mine]), prior[name]), name
+    for text in ('\n'.join(header), '\n'.join(c.get('value') for c in comments)):
+        assert 'Lorentzian 1.000 Hz' in text and 'factor 1' in text and 'MM, MM09' in text
+    xml = open(midas_path).read()
+    assert xml.startswith('<FITT_Generic_XML Creation_date="') and '\n\t<VESPA_SIMULATION' in xml
+    assert '\n\t\t<param name="fitt_PriorLine00001" value="' in xml and xml.endswith('</FITT_Generic_XML>')
+
+
+def test_gava_and_midas_state_the_echo_time_and_report_each_metabolite(tmp_path):
+    """GAVA's and MIDAS's headers state the echo time given (they always said 26 ms), and screen 4
+    lists each metabolite as its lines are fitted, as for VeSPA."""
+    import xml.etree.ElementTree as ET
+    for tool in ('gava', 'midas'):
+        steps = []
+        (tmp_path / tool).mkdir()
+        path = write_basis(_jmrui(), tool, 'default', str(tmp_path / tool), te=35.0,
+                           progress=lambda text, sub=None: steps.append(text))[0]
+        if tool == 'gava':
+            header = [line[1:] for line in open(path).read().split('\n') if line.startswith(';')]
+        else:
+            header = [c.get('value') for c in ET.parse(path).getroot().iter('comment')]
+
+        assert 'TE: 35.0 ms' in header, tool
+        assert steps == ["Lineshape of the set's lines", 'Lines 1/2: NAA', 'Lines 2/2: Cr391'], tool
+
+
 def _oxsa_ppm(path):
     """Each OXSA component's expected ppm, by metabolite."""
     import re
