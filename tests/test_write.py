@@ -1628,3 +1628,18 @@ def test_the_pyamares_prior_names_its_reference_a_singlet_only_where_it_is_one(t
 
     assert '(the largest line of the largest singlet)' in comment(('NAA', 'sI'))
     assert '(the largest line of the largest metabolite)' in comment(('Glu',))
+
+
+def test_a_function_its_lines_rebuild_only_in_part_is_named_with_their_number(tmp_path):
+    """jMRUI's MM alone takes its own 950 Hz lineshape and is rebuilt only in part, by far fewer
+    lines than the most allowed: each priors file names it with the lines it has, not the most."""
+    from writers.write_vespa import vespa_lines
+    basis = load_basis([os.path.join(SAMPLES, 'JMRUI', 'MM.txt')], 'jMRUI .txt')
+    found = vespa_lines(basis)
+    (name, lines, residual), = found['metabolites']
+    assert found['short'] == [f'MM ({len(lines)} lines, {residual:.0e})'] and len(lines) < 100
+
+    for tool in ('vespa_analysis', 'gava', 'pyamares', 'oxsa'):
+        written = write_basis(basis, tool, 'default', str(tmp_path / tool))
+        text = open(written[0]).read()
+        assert f'Rebuilt only to: {found["short"][0]}.' in text and '1000 lines' not in text, tool

@@ -67,7 +67,7 @@ from xml.dom import minidom
 import scipy.io as sio
 
 from writers.centre import CENTRE, at_centre
-from writers.lines import (MAX_LINES, TOL, decompose, fit_lines, fwhm, is_hump,
+from writers.lines import (TOL, decompose, fit_lines, fwhm, is_hump,
                            set_lineshape)
 
 
@@ -191,7 +191,7 @@ def write_vespa(basis_list, outpath,
         f'Phases in VeSPA\'s sign (the conjugate FID). '
         f'Spins: {counted}' + (f' for {", ".join(listed)}' if unlisted and listed else '') +
         (f'; the number of lines for {", ".join(unlisted)}' if unlisted else '') + '.' +
-        (f' Rebuilt by {MAX_LINES} lines only to: {", ".join(short)}.' if short else '') +
+        (f' Rebuilt only to: {", ".join(short)}.' if short else '') +
         (f' Left out, as broad humps that hold no line of the set\'s lineshape (the prior\'s '
          f'lines cannot hold them, and sharp lines in their place are wrong): {", ".join(humps)}. '
          f'Model them with VeSPA\'s own macromolecule model (Voigt tab, macromolecule model '
@@ -222,7 +222,8 @@ def vespa_lines(basis_list, progress=None, tol=TOL, hump=None):
     Returns a dict:
         'metabolites' : [(name, [(ppm, area, phase), ...], residual)], the set's order
         'humps'       : names left out as broad humps (no line of the set's lineshape)
-        'short'       : 'name (residual)' of those MAX_LINES lines rebuild only to that residual
+        'short'       : 'name (n lines, residual)' of those whose lines (at most MAX_LINES) rebuild
+                        them only to that residual
         'skipped'     : names with no lines
         'lineshape'   : the set's lineshape in words
         'shape'       : the set's lineshape (lines.set_lineshape)
@@ -273,8 +274,8 @@ def vespa_lines(basis_list, progress=None, tol=TOL, hump=None):
                 progress(f"Lines {done}", "no lines: skipped")
             continue
         if lines['residual'] > tol:
-            print(f"  WARNING: {MAX_LINES} lines rebuild {met_name} to {lines['residual']:.1e} only")
-            found['short'].append(f"{met_name} ({lines['residual']:.0e})")
+            print(f"  WARNING: {len(amp)} lines rebuild {met_name} to {lines['residual']:.1e} only")
+            found['short'].append(f"{met_name} ({len(amp)} lines, {lines['residual']:.0e})")
 
         # VeSPA's FID is BasiC's conjugate: the line at +f Hz is at CENTRE + f / sf ppm with
         # phase -angle(c); rounded as the prior writes them, so every format holds one number

@@ -91,7 +91,7 @@ from collections import Counter
 import numpy as np
 
 from writers.centre import CENTRE, at_centre
-from writers.lines import TOL, MAX_LINES
+from writers.lines import TOL
 from writers.write_vespa import vespa_lines
 
 
@@ -235,7 +235,7 @@ def write_pyamares(basis_list, outpath, seqte=None, tol=TOL, progress=None):
         comment.append('Left out: ' + '; '.join(why) + ". Leave them to the fit's baseline "
                        '(PyAMARES: truncate_initial_points).')
     if found['short']:
-        comment.append(f'Rebuilt by {MAX_LINES} lines only to: {", ".join(found["short"])}.')
+        comment.append(f'Rebuilt only to: {", ".join(found["short"])}.')
     tied = sum(any(ch.isalpha() for ch in cell) for c in columns for cell in c[1])
     comment.append(f'{len(columns)} peaks: {len(names) + 3} free parameters (each metabolite\'s '
                    f'amplitude, and {ref_base}\'s shift, linewidth and phase; g fixed as by '

@@ -34,7 +34,7 @@ import textwrap
 from datetime import datetime
 
 from writers.centre import CENTRE
-from writers.lines import MAX_LINES, TOL
+from writers.lines import TOL
 from writers.write_vespa import vespa_lines
 
 
@@ -111,7 +111,7 @@ def simulation_comments(basis_list, found, seqte):
         f"conjugate of the source's). Areas on the source's scale, the same for every "
         f"metabolite (factor 1: Scale=1.0 below). The lineshape is not in the lines: the fit's "
         f"lineshape is the data's whole lineshape." +
-        (f" Rebuilt by {MAX_LINES} lines only to: {', '.join(found['short'])}." if found['short']
+        (f" Rebuilt only to: {', '.join(found['short'])}." if found['short']
          else '') +
         (f" Left out, as broad humps that hold no line of the set's lineshape (sharp lines in "
          f"their place are wrong): {', '.join(found['humps'])}. Model them with the fit's own "

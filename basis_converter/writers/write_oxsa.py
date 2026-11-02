@@ -80,7 +80,7 @@ from datetime import datetime
 import numpy as np
 
 from writers.centre import CENTRE, at_centre
-from writers.lines import TOL, MAX_LINES
+from writers.lines import TOL
 from writers.write_vespa import vespa_lines
 from writers.write_pyamares import reference
 
@@ -302,7 +302,7 @@ def write_oxsa(basis_list, outpath, seqte=None, tol=TOL, progress=None):
         head.append('Left out (approximated by nothing): ' + '; '.join(why) +
                     ". Leave them to the fit's baseline.")
     if found['short']:
-        head.append(f'Rebuilt by {MAX_LINES} lines only to: {", ".join(found["short"])}.')
+        head.append(f'Rebuilt only to: {", ".join(found["short"])}.')
     if renamed:
         head.append('Names (MATLAB field names): ' + ', '.join(renamed) + '.')
 
