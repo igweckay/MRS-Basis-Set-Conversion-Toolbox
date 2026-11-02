@@ -1613,3 +1613,17 @@ def test_a_set_without_singlets_takes_the_lineshape_of_its_narrowest_lines(tmp_p
     found = vespa_lines(basis)
     assert found['humps'] == ['MM09'] and not found['short']
     assert [(name, len(lines)) for name, lines, _ in found['metabolites']] == [('Lac', 10)]
+
+
+def test_the_pyamares_prior_names_its_reference_a_singlet_only_where_it_is_one(tmp_path):
+    """The comment says which peak carries the set's free shift, linewidth and phase: sI, a
+    singlet, in the jMRUI sample; Glu alone has none, and its reference is called a metabolite."""
+    folder = os.path.join(SAMPLES, 'JMRUI')
+
+    def comment(names):
+        basis = load_basis([os.path.join(folder, f'{n}.txt') for n in names], 'jMRUI .txt')
+        written = write_basis(basis, 'pyamares', 'default', str(tmp_path / '-'.join(names)))
+        return open(written[0]).read()
+
+    assert '(the largest line of the largest singlet)' in comment(('NAA', 'sI'))
+    assert '(the largest line of the largest metabolite)' in comment(('Glu',))

@@ -214,7 +214,9 @@ def write_pyamares(basis_list, outpath, seqte=None, tol=TOL, progress=None):
         f'dk = pi * linewidth: linewidth {_num(lw0)} Hz, g {_num(g0)}' +
         (' (fit with g_global=False to use it).' if g0 else '.'),
         f'One phase, one lineshape and one shift for the set, as the data have them: the first '
-        f'column, {ref_base} (the largest line of the largest singlet{f", {ref}" if ref != ref_base else ""}), '
+        f'column, {ref_base} (the largest line of the largest '
+        f'{"singlet" if ref in shape.get("singlets", {}) else "metabolite"}'
+        f'{f", {ref}" if ref != ref_base else ""}), '
         f'carries the free chemical shift (+-{PPM_ROOM:g} ppm), linewidth, g and phase (+-180 '
         f'degrees). Every other metabolite\'s first column is tied to it as the basis holds them: '
         f'chemical shift as an offset in Hz, phase as an offset in radians, linewidth and g '
