@@ -576,6 +576,22 @@ def _ah(A, v):
     return (v.conj() @ A).conj()
 
 
+def _cholesky(G):
+    """The lower Cholesky factor of the Gram matrix G. Lines of a broad lineshape are nearly
+    alike, and rounding can leave G short of positive definite: then the factor of G with the
+    smallest ridge, from 1e-12 of its mean diagonal up, that makes it so."""
+    try:
+        return sla.cholesky(G, lower=True)
+    except np.linalg.LinAlgError:
+        scale, eye = np.mean(np.diag(G).real), np.eye(len(G))
+        for ridge in 10.0 ** np.arange(-12, -2):
+            try:
+                return sla.cholesky(G + ridge * scale * eye, lower=True)
+            except np.linalg.LinAlgError:
+                pass
+        raise
+
+
 def _refine(model, y, f, free, sep, iterations):
     """The frequencies of the free lines moved to lower the residual (variable projection),
     each staying at least sep from every other line and within sep of where it was.
@@ -614,7 +630,7 @@ def _refine(model, y, f, free, sep, iterations):
         g = full(x)
         dot, hdot, A = model.operator(g)
         G, S1, S2 = model.sums(g, A, 3, move)
-        C = sla.cholesky(G, lower=True)                             # G = C C^H
+        C = _cholesky(G)                                            # G = C C^H
         a = sla.cho_solve((C, True), hdot(y))
         r = y - dot(a)
         am = a[move]

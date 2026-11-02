@@ -1586,3 +1586,15 @@ def test_osprey_water_is_two_protons_beside_the_metabolites(tmp_path):
     assert max(peaks[names.index(n)] for n in ('Cr', 'NAA', 'GPC')) == peaks.max() == 1.0
     singlet = cr[(ppm > 3.027 - 0.1) & (ppm < 3.027 + 0.1)].sum()            # three protons
     assert abs(water.sum() / singlet / (2 / 3) - 1) < 0.15
+
+
+def test_every_priors_writer_writes_a_set_of_broad_humps_alone(tmp_path):
+    """jMRUI's MM alone, or beside Glu: no singlet, and lines of a lineshape so broad that their
+    Gram matrix rounds short of positive definite while their frequencies are refined. Each
+    priors writer still writes its file."""
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    for names in (('MM',), ('Glu', 'MM')):
+        basis = load_basis([os.path.join(folder, f'{n}.txt') for n in names], 'jMRUI .txt')
+        for tool in ('vespa_analysis', 'gava', 'midas', 'pyamares', 'oxsa'):
+            written = write_basis(basis, tool, 'default', str(tmp_path / f'{tool}-{len(names)}'))
+            assert written and all(os.path.getsize(p) for p in written), (names, tool)
