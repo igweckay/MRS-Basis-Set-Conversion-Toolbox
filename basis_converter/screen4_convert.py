@@ -81,6 +81,7 @@ class Screen4Convert(BaseScreen):
         self._steps_done   = []
         self._output_paths = []
         self.new_btn.config(bg="#e5e7eb", fg="#9ca3af", state="disabled", cursor="")
+        self.back_btn.config(state="disabled", cursor="")
         self._build_context_bar()
         self._build_progress_area()
         # Once the screen is up: ask for the output folder, then convert in a background thread
@@ -465,12 +466,14 @@ class Screen4Convert(BaseScreen):
             fill="x", side="bottom", before=footer
         )
 
-        tk.Button(
+        # Disabled while a conversion runs, so that it is not shown again and started twice
+        self.back_btn = tk.Button(
             footer, text="← Back",
             command=lambda: self.app.show_screen("screen3"),
             relief="flat", bg="#f3f4f6", fg="#374151",
             padx=14, pady=6, cursor="hand2"
-        ).pack(side="left")
+        )
+        self.back_btn.pack(side="left")
 
         self.new_btn = tk.Button(
             footer, text="New conversion →",
@@ -485,6 +488,7 @@ class Screen4Convert(BaseScreen):
             bg="#dbeafe", fg="#1d4ed8",
             state="normal", cursor="hand2"
         )
+        self.back_btn.config(state="normal", cursor="hand2")
 
     def _new_conversion(self):
         """Reset state and go back to screen 1."""

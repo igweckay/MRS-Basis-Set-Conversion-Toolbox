@@ -546,13 +546,14 @@ def widgets(widget):
 def convert(seen, key):
     # The conversion thread reaches the widgets through the main loop, so this runs in it.
     app.show_screen('screen4')               # starts the conversion
-    started = str(screen4.new_btn.cget('state'))
+    started = [str(screen4.new_btn.cget('state')), str(screen4.back_btn.cget('state'))]
     end = time.time() + 60
     while str(screen4.new_btn.cget('state')) != 'normal' and time.time() < end:
         yield
     labels = [w.cget('text') for w in widgets(screen4.scroll_frame) if isinstance(w, tk.Label)]
     seen[key] = {'title': screen4.progress_title.cget('text'), 'error': labels[-1], 'asked': len(asked),
-                 'new conversion while converting': started}
+                 'new conversion, back while converting': started,
+                 'back after': str(screen4.back_btn.cget('state'))}
 
 
 def seen_now():
@@ -603,7 +604,8 @@ print(json.dumps(seen))
 def test_new_conversion_starts_from_an_empty_screen_1_and_screen_4_wants_files(tmp_path):
     """After a conversion, New conversion leaves no card on screen 1, its Next disabled, and no
     tool picked on screen 2, as at start-up. Screen 4 shown with no files says so without asking
-    for an output folder. New conversion is disabled again while screen 4 converts."""
+    for an output folder. New conversion and Back are disabled while screen 4 converts, so that
+    Back and Next cannot start a second conversion beside the first, and enabled at its end."""
     run = run_hidden(NEW_CONVERSION, str(tmp_path))
     if run.returncode == 3:
         pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
@@ -612,10 +614,13 @@ def test_new_conversion_starts_from_an_empty_screen_1_and_screen_4_wants_files(t
     seen = json.loads(run.stdout.splitlines()[-1])
     assert seen['before'] == {'card': 1, 'next 1': 'normal', 'tool': 'lcmodel', 'next 2': 'normal', 'files': 2}
     assert seen['converted']['title'] == 'Conversion complete'
-    assert seen['converted']['new conversion while converting'] == 'disabled'
+    assert seen['converted']['new conversion, back while converting'] == ['disabled', 'disabled']
+    assert seen['converted']['back after'] == 'normal'
     assert [f for f in os.listdir(tmp_path) if f.endswith('.BASIS')]
     assert seen['after'] == {'card': 0, 'next 1': 'disabled', 'tool': None, 'next 2': 'disabled', 'files': 0}
-    assert seen['empty'] == {'title': 'Conversion failed', 'asked': 0, 'new conversion while converting': 'disabled',
+    assert seen['empty'] == {'title': 'Conversion failed', 'asked': 0,
+                             'new conversion, back while converting': ['disabled', 'disabled'],
+                             'back after': 'normal',
                              'error': 'No input files to convert. Go back to screen 1 and upload a basis set.'}
     assert seen['tk off the main thread'] == []
 
