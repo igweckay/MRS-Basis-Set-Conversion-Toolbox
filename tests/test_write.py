@@ -503,8 +503,8 @@ def test_a_lorentzian_s_line_sums_are_the_products_of_its_lines():
 
 def test_a_vespa_export_reports_each_metabolite_as_it_is_fitted(tmp_path):
     """Screen 4 lists each metabolite as its lines are fitted: write_basis hands the VeSPA writer a
-    progress callback (screen 4 gives its step list's), called with the set's lineshape and then
-    once a metabolite, in order, a hump said to be left out. The GUI's list is not tested here."""
+    progress callback (screen 4 gives its step list's), called before the functions are decomposed,
+    with the set's lineshape, and once a metabolite, in order, a hump said to be left out. The GUI's list is not tested here."""
     folder = os.path.join(SAMPLES, 'JMRUI')
     basis = load_basis([os.path.join(folder, f) for f in ('NAA.txt', 'Cr391.txt', 'MM09.txt')],
                        'jMRUI .txt')
@@ -512,10 +512,10 @@ def test_a_vespa_export_reports_each_metabolite_as_it_is_fitted(tmp_path):
     write_basis(basis, 'vespa_analysis', 'default', str(tmp_path),
                 progress=lambda text, sub=None: steps.append((text, sub)))
 
-    assert [text for text, _ in steps] == ["Lineshape of the set's lines", 'Lines 1/3: NAA',
-                                           'Lines 2/3: Cr391', 'Lines 3/3: MM09']
-    assert steps[0][1].startswith('Lorentzian 1.000 Hz')
-    assert steps[1][1].startswith('17 lines, residual') and 'hump' in steps[3][1]
+    assert [text for text, _ in steps] == ['Decomposing each function', "Lineshape of the set's lines",
+                                           'Lines 1/3: NAA', 'Lines 2/3: Cr391', 'Lines 3/3: MM09']
+    assert steps[0][1].startswith('3 functions') and steps[1][1].startswith('Lorentzian 1.000 Hz')
+    assert steps[2][1].startswith('17 lines, residual') and 'hump' in steps[4][1]
 
 
 def test_gava_and_midas_hold_the_vespa_prior_s_lines_as_vespa_simulation_writes_them(tmp_path):
@@ -578,7 +578,8 @@ def test_gava_and_midas_state_the_echo_time_and_report_each_metabolite(tmp_path)
             header = [c.get('value') for c in ET.parse(path).getroot().iter('comment')]
 
         assert 'TE: 35.0 ms' in header, tool
-        assert steps == ["Lineshape of the set's lines", 'Lines 1/2: NAA', 'Lines 2/2: Cr391'], tool
+        assert steps == ['Decomposing each function', "Lineshape of the set's lines",
+                         'Lines 1/2: NAA', 'Lines 2/2: Cr391'], tool
 
 
 def test_gava_and_midas_name_the_source_file_without_its_folders(tmp_path):

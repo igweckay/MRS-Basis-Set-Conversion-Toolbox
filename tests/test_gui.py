@@ -703,7 +703,8 @@ def test_a_failed_conversion_prints_its_traceback_and_shows_its_message(tmp_path
 @pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
 def test_screen_4_lists_each_vespa_metabolite_as_its_lines_are_fitted(tmp_path):
     """The VeSPA writer's progress reaches screen 4's step list from the conversion thread
-    through the main loop, a row for the lineshape and one a metabolite, in order."""
+    through the main loop, a row as the functions are decomposed, one for the lineshape and one a
+    metabolite, in order."""
     folder = os.path.join('..', 'sample_basis_sets', 'JMRUI')
     run = run_hidden(CONVERTED, str(tmp_path), json.dumps({
         'files': [os.path.join(folder, f) for f in ('NAA.txt', 'Cr391.txt')], 'detected_format': 'jMRUI .txt',
@@ -716,9 +717,11 @@ def test_screen_4_lists_each_vespa_metabolite_as_its_lines_are_fitted(tmp_path):
     assert seen['title'] == 'Conversion complete'
     steps = seen['steps']
     assert [step[0] for step in steps] == ['Loading input files', 'Loaded 2 metabolites',
-                                           'Writing VeSPA Analysis format', "Lineshape of the set's lines",
-                                           'Lines 1/2: NAA', 'Lines 2/2: Cr391', 'Done']
-    assert steps[3][1].startswith('Lorentzian 1.000 Hz') and steps[4][1].startswith('17 lines, residual')
-    assert steps[6] == ['Done', f'Output: {tmp_path}']
+                                           'Writing VeSPA Analysis format', 'Decomposing each function',
+                                           "Lineshape of the set's lines", 'Lines 1/2: NAA',
+                                           'Lines 2/2: Cr391', 'Done']
+    assert steps[3][1].startswith('2 functions') and steps[4][1].startswith('Lorentzian 1.000 Hz')
+    assert steps[5][1].startswith('17 lines, residual')
+    assert steps[7] == ['Done', f'Output: {tmp_path}']
     assert [f for f in os.listdir(tmp_path) if f.endswith('.xml')]
     assert seen['asked on the main thread'] == [True] and seen['tk off the main thread'] == []

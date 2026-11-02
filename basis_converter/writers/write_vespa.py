@@ -227,12 +227,16 @@ def vespa_lines(basis_list, progress=None, tol=TOL, hump=None):
         'lineshape'   : the set's lineshape in words
         'shape'       : the set's lineshape (lines.set_lineshape)
         'components'  : each hump's HLSVD components (lines.decompose), by name
-    progress(text, sub), if given, is called with the lineshape and once a function. A writer
+    progress(text, sub), if given, is called before the functions are decomposed, with the
+    lineshape, and once a function. A writer
     whose format can hold a hump's own widths (PyAMARES) passes hump(name, components): what to
     report for it, or None where it is left out after all.
     """
     basis_list = at_centre(basis_list)     # the lines' ppm are read at CENTRE
     names = [core.get('name', 'unknown') for core in basis_list]
+    if progress:                           # minutes for a set of long FIDs, before any line
+        progress("Decomposing each function", f"{len(names)} function{'s' * (len(names) > 1)}, "
+                                               f"then each one's lines are fitted")
     decomposed = [decompose(np.asarray(core['fid']).ravel(), float(core.get('sw') or 4000.0))
                   for core in basis_list]
     shape = set_lineshape(basis_list, decomposed)
