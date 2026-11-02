@@ -1598,3 +1598,18 @@ def test_every_priors_writer_writes_a_set_of_broad_humps_alone(tmp_path):
         for tool in ('vespa_analysis', 'gava', 'midas', 'pyamares', 'oxsa'):
             written = write_basis(basis, tool, 'default', str(tmp_path / f'{tool}-{len(names)}'))
             assert written and all(os.path.getsize(p) for p in written), (names, tool)
+
+
+def test_a_set_without_singlets_takes_the_lineshape_of_its_narrowest_lines(tmp_path):
+    """Lac and MM09 hold no singlet: the lineshape is Lac's 1 Hz, not a median between Lac and
+    the 10 Hz MM09, so MM09 is left out as a hump and Lac is rebuilt from a few lines."""
+    from writers.lines import set_lineshape
+    from writers.write_vespa import vespa_lines
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{n}.txt') for n in ('Lac', 'MM09')], 'jMRUI .txt')
+    shape = set_lineshape(basis)
+    assert shape['source'] == 'lines' and abs(shape['lorentz'] - 1.0) < 0.01
+
+    found = vespa_lines(basis)
+    assert found['humps'] == ['MM09'] and not found['short']
+    assert [(name, len(lines)) for name, lines, _ in found['metabolites']] == [('Lac', 10)]

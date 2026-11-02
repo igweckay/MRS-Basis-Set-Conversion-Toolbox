@@ -293,7 +293,7 @@ def _describe(shape):
     text = f"{shape['kind']} {widths[shape['kind']]}" + \
         (f" (full width {fwhm(shape):.3f} Hz)" if shape['kind'] == 'Voigt' else '')
     if shape['source'] == 'lines':
-        return text + ', no singlet found: the median width of its lines'
+        return text + ', no singlet found: the width of its narrowest lines'
     singlets = ', '.join(shape['singlets'])
     return text + (f', measured on {singlets}' + ('' if shape['uniform'] else
                    ', which differ by more than 2 %'))

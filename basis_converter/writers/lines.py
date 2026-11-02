@@ -292,8 +292,10 @@ def set_lineshape(basis_list, decomposed=None):
     of a singlet's line leaves under 1 % of it: the median of their Lorentzian and Gaussian
     widths. A width under 1 % of the line's full width is noise
     of the fit and set to 0, so the shape is called Lorentzian, Gaussian or Voigt. A set with no
-    singlet is taken as Lorentzian, its width the median over its functions of their
-    components' amplitude-weighted median width. `decomposed`: decompose() of each function.
+    singlet is taken as Lorentzian. Its width is read off each function's narrowest components:
+    the width below which a tenth of its amplitude lies. A multiplet's components are each of
+    the set's lineshape, and a broad hump's are all broad; so the width is the median over the
+    functions within twice the narrowest's. `decomposed`: decompose() of each function.
     A dict 'lorentz', 'gauss', 'kind', 'singlets' (name -> its own shape), 'uniform' (every
     singlet's full width within 2 % of the set's, and of its kind), 'source'.
     """
@@ -316,8 +318,10 @@ def set_lineshape(basis_list, decomposed=None):
             w, a = lines['damping'] / np.pi, np.abs(lines['amplitude'])
             if len(w):
                 o = np.argsort(w)
-                widths.append(w[o][np.searchsorted(np.cumsum(a[o]) / a.sum(), 0.5)])
-        shape = {'lorentz': float(np.median(widths)), 'gauss': 0.0, 'source': 'lines'}
+                widths.append(w[o][np.searchsorted(np.cumsum(a[o]) / a.sum(), 0.1)])
+        widths = np.array(widths)
+        shape = {'lorentz': float(np.median(widths[widths <= 2 * widths.min()])), 'gauss': 0.0,
+                 'source': 'lines'}
     _snap(shape)
     for s in found.values():
         _snap(s)
