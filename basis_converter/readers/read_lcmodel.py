@@ -90,7 +90,7 @@ def read_lcmodel_basis(path):
     hzpppm  = float(seqpar.get('HZPPPM', 0))
     deltat  = float(seqpar.get('DELTAT', 0)) or float(seqpar.get('BADELT', 0))
     echot   = float(seqpar.get('ECHOT',  0)) or None
-    seq     = seqpar.get('SEQ', '').strip("'\" ")
+    seq     = _restore_name(seqpar.get('SEQ', '').strip("'\" "))
     # FWHMBA is the basis' linewidth in ppm (-1 where unknown); kept as stated, and in Hz
     fwhmba  = float(seqpar['FWHMBA']) if seqpar.get('FWHMBA') else None
 

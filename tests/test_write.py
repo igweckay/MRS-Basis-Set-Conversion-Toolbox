@@ -1550,6 +1550,19 @@ def test_mrscloud_files_hold_the_fields_fit_makebasis_reads(tmp_path):
     assert [b['te'] for b in load_basis(written, 'MRSCloud .mat')] == [b['te'] for b in basis]
 
 
+def test_a_basis_states_the_sequence_lcmodel_truncated_in_full(tmp_path):
+    """The sample .BASIS states SEQ='sLASE', cut short as LCModel cuts names; it is read as
+    sLASER, so screen 3 shows it and the FID-A and MRSCloud files fit_makeBasis reads hold it."""
+    import scipy.io as sio
+    cows = [os.path.join(SAMPLES, 'LCModel', 'BASIS_file', 'SLASER_Siemens26.basis')]
+    assert detect_format(cows)['data']['seq'] == 'sLASER'
+    basis = load_basis(cows, 'LCModel .BASIS')
+    assert {b['seq'] for b in basis} == {'sLASER'}
+
+    written = write_basis(basis[:1], 'mrscloud', 'default', str(tmp_path), seq=basis[0]['seq'])
+    assert sio.loadmat(written[0], simplify_cells=True)['outA']['seq'] == 'sLASER'
+
+
 def test_fsl_mrs_keeps_the_echo_time_and_nifti_mrs_the_linewidth(tmp_path):
     """Neither format has a field for them: FSL-MRS's meta, which FSL-MRS does not read, holds the
     echo time (EchoTime, s, as NIfTI-MRS states it), and a user-defined NIfTI-MRS key the linewidth."""
