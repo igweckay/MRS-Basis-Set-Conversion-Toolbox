@@ -1681,3 +1681,16 @@ def test_a_singlet_without_signal_is_skipped_as_any_function_without_signal(tmp_
         assert 'Lac' in open(written[0]).read(), tool
     with pytest.raises(RuntimeError, match='No basis function holds any signal'):
         write_basis(basis[:1], 'vespa_analysis', 'default', str(tmp_path / 'alone'))
+
+
+def test_each_priors_file_names_the_functions_it_found_no_lines_for(tmp_path):
+    """Cr391 all zeros beside Lac is left out of every priors file, and each one says so."""
+    import numpy as np
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{n}.txt') for n in ('Cr391', 'Lac')], 'jMRUI .txt')
+    basis[0]['fid'] = np.zeros_like(basis[0]['fid'])
+    for tool in ('vespa_analysis', 'gava', 'midas', 'pyamares', 'oxsa'):
+        written = write_basis(basis, tool, 'default', str(tmp_path / tool))
+        text = open(written[0]).read()
+        assert 'Cr391' in text and ('No lines found for: Cr391' in text or
+                                    'Cr391: no lines found' in text), tool

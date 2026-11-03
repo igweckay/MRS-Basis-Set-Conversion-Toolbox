@@ -192,6 +192,7 @@ def write_vespa(basis_list, outpath,
         f'Spins: {counted}' + (f' for {", ".join(listed)}' if unlisted and listed else '') +
         (f'; the number of lines for {", ".join(unlisted)}' if unlisted else '') + '.' +
         (f' Rebuilt only to: {", ".join(short)}.' if short else '') +
+        (f' No lines found for: {", ".join(found["skipped"])}.' if found['skipped'] else '') +
         (f' Left out, as broad humps that hold no line of the set\'s lineshape (the prior\'s '
          f'lines cannot hold them, and sharp lines in their place are wrong): {", ".join(humps)}. '
          f'Model them with VeSPA\'s own macromolecule model (Voigt tab, macromolecule model '
