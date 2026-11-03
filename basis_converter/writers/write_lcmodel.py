@@ -21,18 +21,19 @@ Writes basis set to LCModel format:
     $END
     {real} {-imag} ...   <-  8 values per line, imaginary sign flipped
 
-.BASIS file format (confirmed from your SLASER_Siemens26.basis):
+.BASIS file format (confirmed from your SLASER_Siemens26.basis), each header value as
+' KEY = value,', the form spant's read_basis takes, and NDATAB a bare integer:
     $SEQPAR
-     FWHMBA=  {linewidth}
-     HZPPPM=  {sf}
-     ECHOT=   {te}
-     SEQ='{seq}'
+     FWHMBA = {linewidth},
+     HZPPPM = {sf},
+     ECHOT = {te},
+     SEQ = '{seq}',
     $END
     $BASIS1
-     IDBASI='{description}'
-     FMTBAS='(6E13.5)'
-     BADELT=  {1/sw}
-     NDATAB=  {2n}
+     IDBASI = '{description}',
+     FMTBAS = '(6E13.5)',
+     BADELT = {1/sw},
+     NDATAB = {2n}
     $END
     For each metabolite:
         $NMUSED ... $END   ← fitting defaults
