@@ -30,7 +30,7 @@ Core struct returned per metabolite:
         'linewidth'  : float or None, basis_width (Hz)
         'n'          : int, number of points
         'name'       : str, metabolite name
-        'centerFreq' : float, centre frequency in ppm
+        'centerFreq' : None, no ppm reference is stored (read at 4.65 ppm)
         'source'     : str, path to source .json file
     }
 
@@ -156,7 +156,5 @@ def read_fsLmrs_folder(folder_path):
         _log(f"\n  {len(failed)} file(s) skipped: {', '.join(failed)}")
 
     _log(f"\n  Total loaded: {len(results)} metabolites")
-    _log(f"  sw = {results[0]['sw']:.1f} Hz  n = {results[0]['n']}")
-    _log(f"  Note: sf (Larmor freq) not stored in FSL-MRS format — "
-          f"will be requested from user if needed.")
+    _log(f"  sw = {results[0]['sw']:.1f} Hz  sf = {results[0]['sf']} MHz  n = {results[0]['n']}")
     return results
