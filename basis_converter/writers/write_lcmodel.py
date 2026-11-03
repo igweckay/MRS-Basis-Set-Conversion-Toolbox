@@ -100,7 +100,8 @@ def write_lcmodel(basis_list, outdir, mode='both',
 
 ######################## Centre #######################
 
-# the ppm at 0 Hz an LCModel basis is written for (PPMSEP below)
+# the ppm at 0 Hz an LCModel basis is written for: LCModel reads a .BASIS with 4.65 at 0 Hz (plus
+# the ISHIFT one may state) and moves it to the data's centre, PPMCEN
 LCMODEL_CENTRE = 4.65
 
 
@@ -292,7 +293,7 @@ def write_lcmodel_basis(basis_list, outpath,
             f.write(" PPMPK_CONTAM=  0.00000000    ,\n")
             f.write(" PPMPHA=  0.00000000    ,\n")
             f.write(" PPMSCA=  8.43999958    ,\n")
-            f.write(" PPMSEP=  4.65000010    ,\n")         # LCMODEL_CENTRE
+            f.write(" PPMSEP=  4.65000010    ,\n")
             f.write(" PPMSPL= 40*997.000000      ,\n")
             f.write(" PPM_SPLIT= -999.000000    ,\n")
             f.write(" RINTEG=  0.00000000    ,\n")
