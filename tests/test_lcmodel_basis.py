@@ -91,6 +91,27 @@ def test_a_basis_stating_another_centre_keeps_its_peaks_where_they_are(tmp_path)
     assert round(_peak_ppm(raw, 4.65), 2) == round(_peak_ppm(naa, 4.65), 2)
 
 
+def test_an_mrscloud_v2_set_keeps_its_metabolites_and_mm_where_osprey_reads_them(tmp_path):
+    """MRSCloud's v2 sets put 4.68 ppm at 0 Hz for the metabolites, centerFreq for the MM and
+    lipids after them; Osprey reads them so (osp_recalculate_basis_specs)."""
+    import scipy.io as sio
+    from readers.read_osprey import read_osprey
+    sw, n, Bo = 4000.0, 2048, 2.89
+    sf, t = Bo * 42.577, np.arange(n) / sw
+    line = lambda ppm, centre: np.exp(2j * np.pi * (ppm - centre) * sf * t - t / 0.05)
+    fids = np.stack([line(2.008, 4.68), line(0.91, 3.0)], axis=1)
+    for version, ppms in (('v2', [2.008, 0.91]), ('v1', [2.008 - 4.68 + 3.0, 0.91])):
+        path = str(tmp_path / f'{version}.mat')
+        sio.savemat(path, {'BASIS': {
+            'fids': fids, 'name': np.array(['NAA', 'MM09'], dtype=object), 'nMets': 1,
+            'spectralwidth': sw, 'n': n, 'Bo': Bo, 'te': 30.0, 'seq': 'unedited',
+            'centerFreq': 3.0, 'mrsCloudVersion': version}})
+        out = str(tmp_path / f'{version}.BASIS')
+        write_lcmodel_basis(read_osprey(path), out)
+        back = read_lcmodel_basis(out)
+        assert np.allclose([_peak_ppm(b, 4.65) for b in back], ppms, atol=0.02), version  # a point is 0.016
+
+
 def _as_spant_reads(path):
     """The header values spant's read_basis takes (R/basis_set.R): the third blank-separated
     word of a line that starts with ' KEY = '; NDATAB's must be a bare integer."""

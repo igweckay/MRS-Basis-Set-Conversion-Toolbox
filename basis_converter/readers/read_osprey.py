@@ -14,7 +14,8 @@ Osprey .mat structure (top-level variable: BASIS):
     BASIS.Bo            - field strength in Tesla
     BASIS.te            - echo time in ms
     BASIS.seq           - sequence name cell array e.g. {'unedited'}
-    BASIS.centerFreq    - center frequency in ppm
+    BASIS.centerFreq    - center frequency in ppm (of the MM and lipids only, in v2)
+    BASIS.mrsCloudVersion - 'v2' in newer MRSCloud sets, whose metabolites put 4.68 ppm at 0 Hz
     BASIS.name          - cell array of metabolite names (1 x nTotal)
     BASIS.nMets         - number of metabolites (MM/Lip excluded)
     BASIS.nMM           - number of MM/Lip/H2O components
@@ -110,6 +111,14 @@ def read_osprey(path):
             f"FID columns ({n_total}) in {os.path.basename(path)}"
         )
 
+    # MRSCloud's v2 sets hold their metabolites with 4.68 ppm at 0 Hz and only their MM and
+    # lipids at centerFreq; Osprey reads them so (osp_recalculate_basis_specs)
+    try:
+        v2 = _unpack_cell_string(_get(basis, 'mrsCloudVersion', path)).lower() == 'v2'
+    except RuntimeError:
+        v2 = False
+    n_mets = int(_get(basis, 'nMets', path)) if v2 else 0
+
     ############## Build one core struct per metabolite #############
     results = []
     for i, name in enumerate(names):
@@ -123,7 +132,7 @@ def read_osprey(path):
             'name'       : name,
             'te'         : te,
             'seq'        : seq,
-            'centerFreq' : center_freq,
+            'centerFreq' : 4.68 if i < n_mets else center_freq,
             'Bo'         : Bo,
             'source'     : path,
         })
