@@ -535,14 +535,7 @@ def _try_raw_folder(paths):
                 'message': 'LCModel .raw basis functions detected.',
             }
     except Exception as ex:
-        return {
-            'status':           'ambiguous',
-            'format':           'LCModel .raw',
-            'ambiguous_options': ['LCModel .raw files', 'MARSS .raw files'],
-            'data':             {},
-            'missing':          [],
-            'message':          f'Folder of .raw files detected (metadata read failed: {ex}).',
-        }
+        return _failed(f"Could not read .raw file: {ex}")
 
 
 def _try_fsLmrs(paths):

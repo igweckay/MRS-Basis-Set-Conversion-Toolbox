@@ -1643,3 +1643,14 @@ def test_a_function_its_lines_rebuild_only_in_part_is_named_with_their_number(tm
         written = write_basis(basis, tool, 'default', str(tmp_path / tool))
         text = open(written[0]).read()
         assert f'Rebuilt only to: {found["short"][0]}.' in text and '1000 lines' not in text, tool
+
+
+def test_raw_files_that_cannot_be_read_are_called_unreadable(tmp_path):
+    """Each .raw label reads with the same reader: when it fails, screen 1 says why rather than
+    offering a choice of names that would fail the same way on screen 4."""
+    for name in ('a.raw', 'b.raw'):
+        (tmp_path / name).write_text('not a basis function\n')
+    result = detect_format(sorted(str(p) for p in tmp_path.iterdir()))
+
+    assert result['status'] == 'failed' and result['format'] == 'Unreadable'
+    assert result['message'].startswith('Could not read .raw file')
