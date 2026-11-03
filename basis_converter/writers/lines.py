@@ -304,7 +304,11 @@ def set_lineshape(basis_list, decomposed=None):
     for core, lines in zip(basis_list, decomposed):
         name = str(core.get('name', ''))
         if name.lower() in SINGLETS and name not in found:
-            shape = singlet_shape(np.asarray(core['fid']).ravel(), float(core['sw']), lines)
+            fid, sw = np.asarray(core['fid']).ravel(), float(core['sw'])
+            lines = lines if lines is not None else decompose(fid, sw)
+            if not len(lines['amplitude']):            # no signal: no line to measure
+                continue
+            shape = singlet_shape(fid, sw, lines)
             if shape['residual'] <= 0.01:
                 found[name] = shape
     if found:
@@ -319,6 +323,8 @@ def set_lineshape(basis_list, decomposed=None):
             if len(w):
                 o = np.argsort(w)
                 widths.append(w[o][np.searchsorted(np.cumsum(a[o]) / a.sum(), 0.1)])
+        if not widths:
+            raise RuntimeError("No basis function holds any signal: there are no lines to write.")
         widths = np.array(widths)
         shape = {'lorentz': float(np.median(widths[widths <= 2 * widths.min()])), 'gauss': 0.0,
                  'source': 'lines'}

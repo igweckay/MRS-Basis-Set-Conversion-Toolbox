@@ -1645,6 +1645,18 @@ def test_a_function_its_lines_rebuild_only_in_part_is_named_with_their_number(tm
         assert f'Rebuilt only to: {found["short"][0]}.' in text and '1000 lines' not in text, tool
 
 
+def test_a_set_of_functions_without_signal_says_so_for_each_priors_writer(tmp_path):
+    """A function that is all zeros has no lines; beside others it is skipped, but a set of
+    only such functions has nothing to write, and the writer says why rather than numpy."""
+    import numpy as np
+    import pytest
+    basis = load_basis([os.path.join(SAMPLES, 'JMRUI', 'Lac.txt')], 'jMRUI .txt')
+    basis[0]['fid'] = np.zeros_like(basis[0]['fid'])
+    for tool in ('vespa_analysis', 'gava', 'midas', 'pyamares', 'oxsa'):
+        with pytest.raises(RuntimeError, match='No basis function holds any signal'):
+            write_basis(basis, tool, 'default', str(tmp_path / tool))
+
+
 def test_raw_files_that_cannot_be_read_are_called_unreadable(tmp_path):
     """Each .raw label reads with the same reader: when it fails, screen 1 says why rather than
     offering a choice of names that would fail the same way on screen 4."""
@@ -1654,3 +1666,18 @@ def test_raw_files_that_cannot_be_read_are_called_unreadable(tmp_path):
 
     assert result['status'] == 'failed' and result['format'] == 'Unreadable'
     assert result['message'].startswith('Could not read .raw file')
+
+
+def test_a_singlet_without_signal_is_skipped_as_any_function_without_signal(tmp_path):
+    """Cr391 all zeros has no line to measure the lineshape on: beside Lac it is skipped and the
+    lineshape is Lac's; alone, the writer says there is no signal."""
+    import numpy as np
+    import pytest
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{n}.txt') for n in ('Cr391', 'Lac')], 'jMRUI .txt')
+    basis[0]['fid'] = np.zeros_like(basis[0]['fid'])
+    for tool in ('vespa_analysis', 'gava', 'midas', 'pyamares', 'oxsa'):
+        written = write_basis(basis, tool, 'default', str(tmp_path / tool))
+        assert 'Lac' in open(written[0]).read(), tool
+    with pytest.raises(RuntimeError, match='No basis function holds any signal'):
+        write_basis(basis[:1], 'vespa_analysis', 'default', str(tmp_path / 'alone'))
