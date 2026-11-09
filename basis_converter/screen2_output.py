@@ -152,7 +152,7 @@ class Screen2Output(BaseScreen):
         self._format_var = tk.StringVar()
 
         # Osprey only: fit_makeBasis's addMMFlag, shown under Osprey's formats
-        self._add_mm_var = tk.BooleanVar(value=True)
+        self._add_mm_var = tk.BooleanVar(value=False)
         self.add_mm_row = tk.Frame(self.format_panel, bg="#eff6ff")
         tk.Checkbutton(
             self.add_mm_row,
@@ -222,7 +222,7 @@ class Screen2Output(BaseScreen):
             ).pack(side="left")
 
         if tool['id'] == 'osprey':
-            self._add_mm_var.set(True)
+            self._add_mm_var.set(False)
             self.add_mm_row.pack(fill="x", pady=(8, 0))
         else:
             self.add_mm_row.pack_forget()

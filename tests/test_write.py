@@ -1509,10 +1509,11 @@ def test_a_ppmcalib_is_not_taken_as_the_centre(tmp_path):
 
 
 def _osprey(basis, tmp_path):
-    """The BASIS struct the Osprey writer saves: its names, FIDs, spectra and ppm axis."""
+    """The BASIS struct the Osprey writer saves with Osprey's additions: its names, FIDs, spectra
+    and ppm axis."""
     import numpy as np
     import scipy.io as sio
-    path = write_basis(basis, 'osprey', 'default', str(tmp_path), te=26.0)[0]
+    path = write_basis(basis, 'osprey', 'default', str(tmp_path), te=26.0, add_mm=True)[0]
     b = sio.loadmat(path, squeeze_me=True, struct_as_record=False)['BASIS']
     names = [str(n) for n in np.ravel(b.name)]
     return names, np.asarray(b.fids), np.asarray(b.specs), np.asarray(b.ppm).ravel()
@@ -1695,6 +1696,26 @@ def test_osprey_water_is_left_out_of_other_formats_as_osprey_exports_them(tmp_pa
         names = [b['name'] for b in load_basis(written, detect_format(written)['format'])]
         assert 'H2O' not in names and 'NAA' in names
     assert 'H2O' in [b['name'] for b in load_basis(osp, 'Osprey .mat')]
+
+def test_osprey_additions_are_off_by_default_and_keep_the_set_s_own_mm(tmp_path):
+    """A converter writes what it is given: Osprey's MM, lipids and their scaling are added only
+    when asked for (write_basis's add_mm, screen 2's box), and a set's own composite MM is kept
+    beside them when they are, where it used to be dropped in their favour."""
+    import numpy as np
+    import scipy.io as sio
+    folder = os.path.join(SAMPLES, 'JMRUI')
+    basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'NAA', 'MM', 'MM09')],
+                       'jMRUI .txt')
+
+    def written(outdir, **kwargs):
+        path = write_basis(basis, 'osprey', 'mat', str(outdir), te=26.0, **kwargs)[0]
+        b = sio.loadmat(path, squeeze_me=True, struct_as_record=False)['BASIS']
+        return sorted(str(n) for n in np.ravel(b.name)), int(b.flags.addedMM)
+
+    (tmp_path / 'default').mkdir(); (tmp_path / 'added').mkdir()
+    assert written(tmp_path / 'default') == (['Cr', 'H2O', 'MM', 'MM09', 'NAA'], 0)
+    names, flag = written(tmp_path / 'added', add_mm=True)
+    assert flag == 1 and {'MM', 'MM09', 'MM12', 'MM14', 'MM17', 'MM20', 'Lip09', 'Lip13', 'Lip20'} <= set(names)
 
 
 def test_a_set_written_for_osprey_reads_back_as_it_was_given(tmp_path):

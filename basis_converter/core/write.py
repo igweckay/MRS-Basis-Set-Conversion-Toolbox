@@ -10,7 +10,7 @@ Used by the GUI (screen4_convert.py) and by scripts, without a GUI.
 import os
 
 
-def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=True,
+def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=False,
                 progress=None):
     """
     Write basis functions using the appropriate writer.

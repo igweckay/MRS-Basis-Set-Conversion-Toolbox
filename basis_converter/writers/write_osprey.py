@@ -10,7 +10,7 @@ from the same functions:
 
 Pipeline:
     1. Apply name mapping (MARSS names -> Osprey names), summing MARSS's creatine parts
-    2. Skip SKIP entries and duplicates
+    2. Sum the parts of one function (Cr, PCr), keep the rest
     3. Zero-pad FIDs to targetN if needed
     4. DC-correct each function as op_dccorr(.., 'p') does: the mean of the spectrum in
        the 0.5 ppm at each end of its axis, subtracted
@@ -40,7 +40,6 @@ from writers.centre import CENTRE, fid_at_centre
 
 
 ############# Name mapping (MARSS filename stems -> Osprey names) #############
-# 'SKIP' means the metabolite is excluded from the Osprey basis set
 
 NAME_MAP = {
     'Asc'     : 'Asc',
@@ -58,7 +57,7 @@ NAME_MAP = {
     'Lac'     : 'Lac',
     'ml'      : 'mI',
     'mI'      : 'mI',
-    'MM'      : 'SKIP',      # composite MM — replaced by parametric components
+    'MM'      : 'MM',        # a set's composite MM is kept as it is, Osprey's added beside it on request
     'MM09'    : 'MM09',      # a macromolecule; it takes the place of Osprey's own MM09
     'NAA'     : 'NAA',
     'NAAG'    : 'NAAG',
@@ -96,7 +95,7 @@ MM_NAMES = {'MM09','MM12','MM14','MM17','MM20',
 
 ############# Main entry point #############
 def write_osprey(basis_list, outpath,
-                 target_n=0, add_mm=True,
+                 target_n=0, add_mm=False,
                  te=30.0, sequence='unedited'):
     """
     Assemble and save an Osprey BASIS .mat file.
@@ -107,9 +106,11 @@ def write_osprey(basis_list, outpath,
         Each dict must have: fid, sw, sf, n, name
     outpath    : str, full path for output .mat file
     target_n   : int, target spectral points (0 = native size)
-    add_mm     : bool, fit_makeBasis's addMMFlag: add Osprey's MM/Lip for missing components, in
-                 place of a set's composite MM, and rescale the set's own; False keeps the set's
-                 MM as they are and adds none (the H2O Osprey's water fit takes is added either way)
+    add_mm     : bool, fit_makeBasis's addMMFlag: add Osprey's MM/Lip for the components the set
+                 has none of, and rescale the set's own MM/Lip to Osprey's proton-equivalent
+                 amplitudes; False (default) writes the set as it is and adds none. A set's own
+                 functions, a composite MM among them, are kept either way; the H2O Osprey's water
+                 fit takes is added either way
     te         : float, echo time in ms
     sequence   : str, e.g. 'unedited'
     """
@@ -127,12 +128,6 @@ def write_osprey(basis_list, outpath,
     for core in basis_list:
         stem     = SHORT.get(core['name'], core['name'])
         osp_name = NAME_MAP.get(stem, stem)   # use original name if not in map
-
-        if osp_name == 'SKIP' and not add_mm:     # nothing takes its place: kept, as it is named
-            osp_name = stem
-        elif osp_name == 'SKIP':
-            print(f"  Skipping (SKIP): {stem}")
-            continue
 
         if osp_name in met_names:
             if stem in PARTS:

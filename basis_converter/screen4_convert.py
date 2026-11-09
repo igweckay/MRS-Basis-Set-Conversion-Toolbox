@@ -19,7 +19,7 @@ State read by this screen:
     state['output_tool']    : e.g. 'LCModel'
     state['output_tool_id'] : e.g. 'lcmodel'
     state['output_format']  : e.g. 'both' | 'raw' | 'default'
-    state['add_mm']         : Osprey only: add Osprey's MM and lipids (True if not set)
+    state['add_mm']         : Osprey only: add Osprey's MM and lipids (False if not set)
     state['params']         : user-supplied parameter overrides
 
 State written by this screen:
@@ -463,7 +463,7 @@ class Screen4Convert(BaseScreen):
         seq = self.state.get('core', {}).get('seq') or \
               self.state.get('params', {}).get('seq')
         return write_basis(basis_list, tool_id, out_fmt, outdir, te=te, seq=seq,
-                           add_mm=self.state.get('add_mm', True), progress=self._step)
+                           add_mm=self.state.get('add_mm', False), progress=self._step)
 
     def _ask_output_folder(self):
         """On the main thread: the folder the user picks, or ~/Desktop/basis_output."""

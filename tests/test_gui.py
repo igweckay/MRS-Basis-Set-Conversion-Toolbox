@@ -204,9 +204,9 @@ seen['osprey dropped'] = seen_now()
 pick('osprey', 'mat')
 seen['osprey again'] = seen_now()
 checkbox().invoke()
-seen['unchecked'] = seen_now()
+seen['checked'] = seen_now()
 screen._on_next()
-seen['next, unchecked'] = state.get('add_mm')
+seen['next, checked'] = state.get('add_mm')
 pick('lcmodel', 'basis')
 seen['lcmodel'] = seen_now()
 screen._on_next()
@@ -218,7 +218,9 @@ print(json.dumps(seen))
 
 
 @pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
-def test_osprey_alone_offers_its_macromolecules_checked_and_screen_2_keeps_the_choice():
+def test_osprey_alone_offers_its_macromolecules_unchecked_and_screen_2_keeps_the_choice():
+    """Osprey's macromolecules, lipids and their scaling are an addition to the set, so they are
+    off until asked for; the box shows for Osprey only, and what the user ticks reaches the state."""
     run = subprocess.run([sys.executable, '-c', ADD_MM_SHOWN], capture_output=True, text=True,
                          cwd=os.path.join(ROOT, 'basis_converter'))
     if run.returncode == 3:
@@ -228,11 +230,11 @@ def test_osprey_alone_offers_its_macromolecules_checked_and_screen_2_keeps_the_c
     text = "Add Osprey's macromolecules and lipids (fit_makeBasis addMMFlag)"
     assert json.loads(run.stdout) == {
         'none picked': 'hidden',
-        'osprey': {'checked': True, 'text': text},
+        'osprey': {'checked': False, 'text': text},
         'osprey dropped': 'hidden',
-        'osprey again': {'checked': True, 'text': text},
-        'unchecked': {'checked': False, 'text': text},
-        'next, unchecked': False,
+        'osprey again': {'checked': False, 'text': text},
+        'checked': {'checked': True, 'text': text},
+        'next, checked': True,
         'lcmodel': 'hidden',
         'next, lcmodel': 'not set',
         'fsl-mrs': 'hidden',
@@ -344,20 +346,22 @@ folder = os.path.join('..', 'sample_basis_sets', 'JMRUI')
 basis = load_basis([os.path.join(folder, f'{p}.txt') for p in ('Cr391', 'CrNo391', 'NAA', 'MM', 'MM09')],
                    'jMRUI .txt')
 for outdir, state in zip(sys.argv[1:], ({'core': {'te': 26.0}, 'add_mm': False},
-                                        {'core': {'te': 26.0}})):
+                                        {'core': {'te': 26.0}},
+                                        {'core': {'te': 26.0}, 'add_mm': True})):
     Screen4Convert(None, state, None)._write(basis, 'osprey', 'mat', outdir)
 """
 
 
 @pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
 def test_screen_4_leaves_osprey_macromolecules_out_when_screen_2_says_so(tmp_path):
-    """state['add_mm'] False is fit_makeBasis's addMMFlag 0: none of Osprey's MM and lipids are
-    added and the set's own MM and MM09 are kept; the H2O BasiC adds for Osprey's water fit is
-    there either way. Without add_mm in the state, Osprey's are added, as before."""
+    """state['add_mm'] False, or no add_mm in the state, is fit_makeBasis's addMMFlag 0: none of
+    Osprey's MM and lipids are added and the set's own MM and MM09 are kept; the H2O BasiC adds
+    for Osprey's water fit is there either way. With add_mm True, Osprey's are added and the
+    set's own MM is still kept."""
     import numpy as np
     import scipy.io as sio
-    left_out, added = tmp_path / 'left_out', tmp_path / 'added'
-    run = subprocess.run([sys.executable, '-c', WRITTEN_FOR_OSPREY, str(left_out), str(added)],
+    left_out, unset, added = tmp_path / 'left_out', tmp_path / 'unset', tmp_path / 'added'
+    run = subprocess.run([sys.executable, '-c', WRITTEN_FOR_OSPREY, str(left_out), str(unset), str(added)],
                          capture_output=True, text=True, cwd=os.path.join(ROOT, 'basis_converter'))
     assert run.returncode == 0, run.stderr
 
@@ -367,8 +371,9 @@ def test_screen_4_leaves_osprey_macromolecules_out_when_screen_2_says_so(tmp_pat
 
     ospreys = {'MM12', 'MM14', 'MM17', 'MM20', 'Lip09', 'Lip13', 'Lip20'}
     assert written(left_out) == (['Cr', 'H2O', 'MM', 'MM09', 'NAA'], 0)
+    assert written(unset) == (['Cr', 'H2O', 'MM', 'MM09', 'NAA'], 0)
     names, flag = written(added)
-    assert ospreys <= set(names) and flag == 1
+    assert ospreys <= set(names) and {'MM', 'MM09'} <= set(names) and flag == 1
 
 
 SETS_PICKED = """
