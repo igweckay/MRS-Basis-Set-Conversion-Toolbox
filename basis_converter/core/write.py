@@ -10,7 +10,8 @@ Used by the GUI (screen4_convert.py) and by scripts, without a GUI.
 import os
 
 
-def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=True):
+def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=True,
+                progress=None):
     """
     Write basis functions using the appropriate writer.
 
@@ -21,9 +22,11 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=
     out_fmt    : str, one of that tool's format ids, or 'default'
     outdir     : str, the output folder
     te         : float or None, echo time in ms; if None, the one the set states, and where a
-                 format needs one and the set states none, 30 (26 for OXSA)
+                 format needs one and the set states none, 30
     seq        : str or None, sequence name ('unedited' if None)
     add_mm     : bool, Osprey only: add Osprey's MM and lipids, as fit_makeBasis's addMMFlag
+    progress   : callable or None, VeSPA, GAVA, MIDAS, PyAMARES and OXSA only: progress(text, sub)
+                 as each metabolite's lines are fitted (screen 4 lists them as steps)
 
     Returns
     -------
@@ -119,34 +122,37 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=
         from writers.write_fida import write_fida_folder
         return write_fida_folder(basis_list, outdir)
 
+    # VeSPA's priors, VeSPA-Simulation's GAVA and MIDAS exports, PyAMARES' and OXSA's priors: te,
+    # as for every format
+
+    if tool_id == 'oxsa':
+        from writers.write_oxsa import pk_name, write_oxsa
+        out_file = os.path.join(outdir, pk_name(basis_list) + '.m')     # the function's own name
+        write_oxsa(basis_list, out_file, seqte=te, progress=progress)
+        return [out_file]
+
     if tool_id == 'pyamares':
         from writers.write_pyamares import write_pyamares
         out_file = os.path.join(outdir, 'pyamares_priors.csv')
-        write_pyamares(basis_list, out_file)
-        return [out_file]
-
-    if tool_id == 'oxsa':
-        from writers.write_oxsa import write_oxsa
-        out_file = os.path.join(outdir, 'run_oxsa_amares.m')
-        write_oxsa(basis_list, out_file, seqte=float(stated_te or 26.0))
+        write_pyamares(basis_list, out_file, seqte=te, progress=progress)
         return [out_file]
 
     if tool_id == 'midas':
         from writers.write_midas import write_midas
         out_file = os.path.join(outdir, 'midas_priors.xml')
-        write_midas(basis_list, out_file)
+        write_midas(basis_list, out_file, seqte=te, progress=progress)
         return [out_file]
 
     if tool_id == 'gava':
         from writers.write_gava import write_gava
         out_file = os.path.join(outdir, 'gava_priors.txt')
-        write_gava(basis_list, out_file)
+        write_gava(basis_list, out_file, seqte=te, progress=progress)
         return [out_file]
 
     if tool_id in ('vespa_analysis', 'vespa_gen2'):
         from writers.write_vespa import write_vespa
         out_file = os.path.join(outdir, 'vespa_priors.xml')
-        write_vespa(basis_list, out_file)
+        write_vespa(basis_list, out_file, seqte=te, progress=progress)
         return [out_file]
 
     if tool_id in ('jet', 'spinwizard'):

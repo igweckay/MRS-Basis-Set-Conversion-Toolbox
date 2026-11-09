@@ -5,6 +5,12 @@ Basis Set Converter — Screen 4: Conversion and output
 Runs the conversion in a background thread so the GUI stays responsive.
 Shows a step-by-step progress list and the output files when done.
 
+Only the main thread calls Tk. The output folder is asked before the thread
+starts; the thread puts its steps, and the end of the conversion, on a queue
+that the main thread empties every POLL_MS while the conversion runs. (A
+tkinter that takes Tcl for unthreaded, as 3.11 and 3.12 do with Tcl 9, would
+run a call from the thread as it comes and corrupt Tcl or hang.)
+
 State read by this screen:
     state['files']          : list of input file paths
     state['detected_format']: input format string
@@ -13,6 +19,7 @@ State read by this screen:
     state['output_tool']    : e.g. 'LCModel'
     state['output_tool_id'] : e.g. 'lcmodel'
     state['output_format']  : e.g. 'both' | 'raw' | 'default'
+    state['add_mm']         : Osprey only: add Osprey's MM and lipids (True if not set)
     state['params']         : user-supplied parameter overrides
 
 State written by this screen:
@@ -20,11 +27,16 @@ State written by this screen:
 """
 
 import os
+import queue
 import tkinter as tk
 from tkinter import ttk, filedialog
 import threading
+import traceback
 
 from base_screen import BaseScreen
+
+
+POLL_MS = 50   # how often the main thread takes the conversion thread's updates
 
 
 class Screen4Convert(BaseScreen):
@@ -68,11 +80,13 @@ class Screen4Convert(BaseScreen):
         self._status       = 'idle'
         self._steps_done   = []
         self._output_paths = []
+        self.new_btn.config(bg="#e5e7eb", fg="#9ca3af", state="disabled", cursor="")
+        self.back_btn.config(state="disabled", cursor="")
         self._build_context_bar()
         self._build_progress_area()
-        # Start conversion in background thread
-        thread = threading.Thread(target=self._run_conversion, daemon=True)
-        thread.start()
+        # Once the screen is up: ask for the output folder, then convert in a background thread
+        self._updates = queue.Queue()
+        self.after(0, self._start_conversion, self._updates)
 
     #################### Context bar ####################
 
@@ -332,49 +346,67 @@ class Screen4Convert(BaseScreen):
 
     #################### Conversion logic #################### 
 
-    def _run_conversion(self):
+    def _start_conversion(self, updates):
         """
-        Run the full conversion pipeline in a background thread.
-        Uses self.after() to update the UI safely from the thread.
+        On the main thread: check there are files, ask for the output folder, then start the
+        conversion thread and take its updates. A failure here is shown as one in the thread.
         """
         try:
-            self._convert()
+            if not self.state.get('files'):
+                raise RuntimeError("No input files to convert. "
+                                   "Go back to screen 1 and upload a basis set.")
+            outdir = self._ask_output_folder()
         except Exception as ex:
-            self.after(0, self._set_error, str(ex))
+            traceback.print_exc()
+            self._set_error(str(ex))
+            return
+        self.progress_title.config(text='Converting…')
+        threading.Thread(target=self._run_conversion, args=(outdir, updates), daemon=True).start()
+        self._take_updates(updates)
+
+    def _take_updates(self, updates):
+        """On the main thread: run what the conversion thread queued, until it ends."""
+        while True:
+            try:
+                func, args = updates.get_nowait()
+            except queue.Empty:
+                break
+            func(*args)
+            if func in (self._set_done, self._set_error):
+                return
+        if updates is self._updates:        # not if the screen was shown again since
+            self.after(POLL_MS, self._take_updates, updates)
+
+    def _run_conversion(self, outdir, updates):
+        """
+        Run the full conversion pipeline in a background thread.
+        It never calls Tk: its steps and its end go on the queue the main thread takes.
+        A failure shows its message in the window and prints its traceback to stderr.
+        """
+        try:
+            output_paths = self._convert(outdir)
+        except Exception as ex:
+            traceback.print_exc()
+            updates.put((self._set_error, (str(ex),)))
+        else:
+            updates.put((self._set_done, (output_paths,)))
 
     def _step(self, text, sub=None):
-        """Add a step to the UI from the background thread."""
-        self.after(0, self._add_step, text, 'done', sub)
+        """Add a step to the UI from the background thread, through the queue."""
+        self._updates.put((self._add_step, (text, 'done', sub)))
 
-    def _convert(self):
-        """Main conversion pipeline."""
+    def _convert(self, outdir):
+        """Main conversion pipeline, into outdir. Returns the paths written."""
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))))
 
         files    = self.state.get('files', [])
         fmt      = self.state.get('detected_format', '')
-        core     = self.state.get('core', {})
         tool_id  = self.state.get('output_tool_id', '')
         out_fmt  = self.state.get('output_format', 'default')
 
-        #################### Ask user for output folder #################### 
-        outdir = self.after(0, self._ask_output_folder)
-        # Since filedialog must run on main thread, use a synchronized approach
-        outdir_holder = [None]
-        done_event    = threading.Event()
-
-        def ask():
-            d = filedialog.askdirectory(title="Select output folder")
-            outdir_holder[0] = d or os.path.expanduser("~/Desktop/basis_output")
-            done_event.set()
-
-        self.after(0, ask)
-        done_event.wait()
-        outdir = outdir_holder[0]
         os.makedirs(outdir, exist_ok=True)
-
-        self.after(0, self.progress_title.config, {'text': 'Converting…'})
 
         ##################### Step 1: Load all basis functions #################### 
         self._step("Loading input files", sub=fmt)
@@ -399,9 +431,7 @@ class Screen4Convert(BaseScreen):
         output_paths = self._write(basis_list, tool_id, out_fmt, outdir)
 
         self._step("Done", sub=f"Output: {outdir}")
-
-        ####################  Show output #################### 
-        self.after(0, self._set_done, output_paths)
+        return output_paths
 
     def _load_basis(self, files, fmt):
         """Load basis functions using the appropriate reader."""
@@ -419,10 +449,13 @@ class Screen4Convert(BaseScreen):
               self.state.get('params', {}).get('te')
         seq = self.state.get('core', {}).get('seq') or \
               self.state.get('params', {}).get('seq')
-        return write_basis(basis_list, tool_id, out_fmt, outdir, te=te, seq=seq)
+        return write_basis(basis_list, tool_id, out_fmt, outdir, te=te, seq=seq,
+                           add_mm=self.state.get('add_mm', True), progress=self._step)
 
     def _ask_output_folder(self):
-        pass   # placeholder — actual call is in _convert via threading
+        """On the main thread: the folder the user picks, or ~/Desktop/basis_output."""
+        d = filedialog.askdirectory(title="Select output folder")
+        return d or os.path.expanduser("~/Desktop/basis_output")
 
     #################### Footer ####################
 
@@ -433,12 +466,14 @@ class Screen4Convert(BaseScreen):
             fill="x", side="bottom", before=footer
         )
 
-        tk.Button(
+        # Disabled while a conversion runs, so that it is not shown again and started twice
+        self.back_btn = tk.Button(
             footer, text="← Back",
             command=lambda: self.app.show_screen("screen3"),
             relief="flat", bg="#f3f4f6", fg="#374151",
             padx=14, pady=6, cursor="hand2"
-        ).pack(side="left")
+        )
+        self.back_btn.pack(side="left")
 
         self.new_btn = tk.Button(
             footer, text="New conversion →",
@@ -453,15 +488,19 @@ class Screen4Convert(BaseScreen):
             bg="#dbeafe", fg="#1d4ed8",
             state="normal", cursor="hand2"
         )
+        self.back_btn.config(state="normal", cursor="hand2")
 
     def _new_conversion(self):
         """Reset state and go back to screen 1."""
         for key in ['files', 'detected_format', 'detection_status',
                     'core', 'missing_fields', 'ambiguous_options',
                     'compatible_tools', 'format_confirmed',
+                    'uploaded_files', 'basis_sets', 'set_picked',
                     'output_tool', 'output_tool_id', 'output_format',
-                    'output_path', 'params']:
+                    'add_mm', 'output_path', 'params']:
             self.state.pop(key, None)
+        self.app.screens["screen1"].reset()
+        self.app.screens["screen2"].reset()
         self.app.show_screen("screen1")
 
     #################### Utilities ##############################

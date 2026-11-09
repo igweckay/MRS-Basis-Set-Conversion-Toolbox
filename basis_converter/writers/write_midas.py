@@ -2,73 +2,51 @@
 writers/write_midas.py
 Basis Set Converter — MIDAS Prior XML writer
 
-Writes a MIDAS FITT_Generic_XML prior file from a list of core struct dicts.
-
-Format confirmed from VeSPA Simulation _do_output_midasxml():
+Writes a MIDAS FITT_Generic_XML prior file from a list of core struct dicts, as
+VeSPA-Simulation writes one (simulation/dialog_mixed_metabolite_output.py, _do_output_midasxml):
 
     <FITT_Generic_XML Creation_date="..." Creation_time="...">
-      <VESPA_SIMULATION_MIDAS_EXPORT>
-        <comment line="line0000" value="..."/>
-        ...
-      </VESPA_SIMULATION_MIDAS_EXPORT>
-      <PRIOR_METABOLITE_INFORMATION>
-        <param name="fitt_PriorLine00001"
-               value="NAA++0++0++0++0++2.008++1.0++0.0"/>
-        ...
-      </PRIOR_METABOLITE_INFORMATION>
+    	<VESPA_SIMULATION_MIDAS_EXPORT>
+    		<comment line="line0000" value="..." />
+    		...
+    	</VESPA_SIMULATION_MIDAS_EXPORT>
+    	<PRIOR_METABOLITE_INFORMATION>
+    		<param name="fitt_PriorLine00001" value="NAA++0.0++0.0++0.0++0++2.00799997++29.61939201++3.216372" />
+    		...
+    	</PRIOR_METABOLITE_INFORMATION>
     </FITT_Generic_XML>
 
+indented with tabs and written by ElementTree, as VeSPA's util_xml.indent and tree.write do.
 Each param value is '++'-joined:
     abbr ++ dim1 ++ dim2 ++ dim3 ++ line_index ++ ppm ++ area ++ phase
+with the fields GAVA's rows hold (write_gava.py): dims 0.0 for a single simulation, the line
+index from 0 for each metabolite, the param number running over the file.
 
-Dims are always 0 for a single-loop export (no TE or loop variation).
-PPM positions from metabList.mat literature shifts (same as write_vespa.py).
-Areas from FFT spectrum at those positions, normalized to dominant=1.0.
+The lines are the VeSPA prior's (write_vespa.vespa_lines), as VeSPA-Simulation writes its
+simulation's same ppms, areas and phases to MIDAS, GAVA and its Analysis prior. The comment
+names the source's file (not its folders) and states the lineshape, the scale and the functions
+left out as broad humps.
 
 Entry point:
-    write_midas(basis_list, outpath, seqte, metablist_path) → .xml file
+    write_midas(basis_list, outpath, seqte, metablist_path, progress) → .xml file
 """
 
 import os
-import numpy as np
 from datetime import datetime
 import xml.etree.ElementTree as ET
-from xml.dom import minidom
 
 if __name__ == '__main__':                    # run as a script: find the writers package
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from writers.centre import at_centre
-
-
-PPM_CALIB = 4.65
-
-# Import shared helpers from write_vespa
-def _get_peaks(basis_list, ppm_table):
-    """Shared peak detection logic — import from write_vespa."""
-    from writers.write_vespa import _get_lit_ppms, _peaks_at_ppms, PPM_CALIB as VC
-    results = {}
-    for core in basis_list:
-        name      = core.get('name', 'unknown')
-        fid       = np.asarray(core['fid']).ravel()
-        sf        = float(core.get('sf') or 123.26)
-        sw        = float(core.get('sw') or 4000.0)
-        ppm_calib = VC                           # (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
-        lit_lines = _get_lit_ppms(name, ppm_table)
-        peaks     = _peaks_at_ppms(fid, sf, sw, lit_lines, ppm_calib=ppm_calib)
-        if peaks:
-            max_area = max(abs(a) for _, a, _ in peaks)
-            if max_area > 0:
-                peaks = [(p, round(a/max_area, 12), ph) for p, a, ph in peaks]
-            peaks = [(p, a, ph) for p, a, ph in peaks if a > 0]
-        results[name] = peaks
-    return results
+from writers.write_gava import simulation_comments, source_name
+from writers.write_vespa import vespa_lines
 
 
 def write_midas(basis_list, outpath,
                 seqte=26.0,
-                metablist_path=None):
+                metablist_path=None,
+                progress=None):
     """
     Write a MIDAS FITT_Generic_XML prior XML file.
 
@@ -77,90 +55,42 @@ def write_midas(basis_list, outpath,
     basis_list     : list of core struct dicts
     outpath        : str, full path for output .xml file
     seqte          : float, echo time in ms
-    metablist_path : str or None, path to metabList.mat
+    metablist_path : str or None, unused (MIDAS's lines hold no spin count)
+    progress       : callable or None, progress(text, sub) once a metabolite's lines are fitted
+                     or it is left out (write_vespa.vespa_lines)
     """
-    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 
     if not basis_list:
         raise RuntimeError("basis_list is empty")
 
-    # Load ppm table
-    from writers.write_vespa import _load_metablist, METAB_PPM_TABLE
-    ppm_table = _load_metablist(metablist_path) if metablist_path \
-                else {k: [(p, 1) for p in v] for k, v in METAB_PPM_TABLE.items()}
+    found = vespa_lines(basis_list, progress)
+    stamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S').split('T')
 
-    # Get peaks for all metabolites
-    all_peaks = _get_peaks(basis_list, ppm_table)
+    root = ET.Element('FITT_Generic_XML', {'Creation_date': stamp[0], 'Creation_time': stamp[1]})
 
-    now = datetime.now()
-    stamp_date = now.strftime('%Y-%m-%d')
-    stamp_time = now.strftime('%H:%M:%S')
-
-    ################ Build XML ################
-    root = ET.Element('FITT_Generic_XML', {
-        'Creation_date': stamp_date,
-        'Creation_time': stamp_time,
-    })
-
-    # Comment node
     comment_elem = ET.SubElement(root, 'VESPA_SIMULATION_MIDAS_EXPORT')
     comments = [
         'MIDAS Prior XML generated by basis_set_converter',
-        f'Source: {basis_list[0].get("source", "unknown")}',
-        f'TE: {seqte} ms',
-        f'Metabolites: {len(basis_list)}',
-        'https://github.com/SAIL-GuoLab/basis_set_converter',
-    ]
+        f'Source: {source_name(basis_list)}',
+    ] + simulation_comments(basis_list, found, seqte)
     for i, line in enumerate(comments):
-        ET.SubElement(comment_elem, 'comment', {
-            'line' : f'line{i:04d}',
-            'value': line,
-        })
+        ET.SubElement(comment_elem, 'comment', {'line': f'line{i:04d}', 'value': line})
 
-    # Prior metabolite information
     prior_elem = ET.SubElement(root, 'PRIOR_METABOLITE_INFORMATION')
-
     irun = 1
-    for core in basis_list:
-        name  = core.get('name', 'unknown')
-        peaks = all_peaks.get(name, [])
-
-        if not peaks:
-            print(f"  WARNING: no peaks for {name} — skipping")
-            continue
-
-        for line_idx, (ppm, area, phase) in enumerate(peaks):
-            pname = f'fitt_PriorLine{irun:05d}'
-            # value: abbr++dim1++dim2++dim3++line_index++ppm++area++phase
-            value = '++'.join([
-                name,
-                '0', '0', '0',          # dims always 0
-                str(line_idx),
-                str(round(ppm,   6)),
-                str(round(area,  12)),
-                str(round(phase, 6)),
-            ])
-            ET.SubElement(prior_elem, 'param', {
-                'name' : pname,
-                'value': value,
-            })
+    for name, rows, _ in found['metabolites']:
+        for i, (ppm, area, phase) in enumerate(rows):
+            value = '++'.join([name, '0.0', '0.0', '0.0', str(i), str(ppm), str(area), str(phase)])
+            ET.SubElement(prior_elem, 'param', {'name': f'fitt_PriorLine{irun:05d}', 'value': value})
             irun += 1
 
-        print(f"  {name:15s}  {len(peaks):2d} peaks  "
-              f"dominant={peaks[0][0]:.4f} ppm")
-
-    # Write pretty XML
-    xml_str = minidom.parseString(
-        ET.tostring(root, encoding='utf-8')
-    ).toprettyxml(indent='  ', encoding='utf-8')
-
-    with open(outpath, 'wb') as f:
-        f.write(xml_str)
+    ET.indent(root, space='\t')
+    ET.ElementTree(root).write(outpath, 'utf-8')
 
     print(f"\n  Done. MIDAS prior XML: {os.path.basename(outpath)}")
-    print(f"  {len(basis_list)} metabolites  TE={seqte} ms")
+    print(f"  {len(found['metabolites'])} of {len(basis_list)} metabolites  TE={seqte} ms")
 
 
 ################# Command line ################
@@ -168,16 +98,15 @@ def write_midas(basis_list, outpath,
 if __name__ == '__main__':
     import sys
     if len(sys.argv) < 3:
-        print("Usage: python write_midas.py <input_folder> <output.xml> [te_ms] [metabList.mat]")
+        print("Usage: python write_midas.py <input_folder> <output.xml> [te_ms]")
         sys.exit(1)
 
     from readers.read_marss import read_marss_file, read_marss_folder
     input_path     = sys.argv[1]
     outpath        = sys.argv[2]
     seqte          = float(sys.argv[3]) if len(sys.argv) > 3 else 26.0
-    metablist_path = sys.argv[4] if len(sys.argv) > 4 else None
 
     basis_list = read_marss_folder(input_path) if os.path.isdir(input_path) \
                  else [read_marss_file(input_path)]
     print(f"Loaded {len(basis_list)} metabolites\n")
-    write_midas(basis_list, outpath, seqte=seqte, metablist_path=metablist_path)
+    write_midas(basis_list, outpath, seqte=seqte)

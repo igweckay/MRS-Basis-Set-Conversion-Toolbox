@@ -14,6 +14,8 @@ State written by this screen:
     state['output_tool']    : str, e.g. 'LCModel'
     state['output_tool_id'] : str, e.g. 'lcmodel'
     state['output_format']  : str, e.g. 'both' / 'mat' / 'default'
+    state['add_mm']         : bool, Osprey only: add Osprey's macromolecules and lipids
+                              (fit_makeBasis's addMMFlag); not set for other tools
 """
 
 import tkinter as tk
@@ -149,6 +151,21 @@ class Screen2Output(BaseScreen):
 
         self._format_var = tk.StringVar()
 
+        # Osprey only: fit_makeBasis's addMMFlag, shown under Osprey's formats
+        self._add_mm_var = tk.BooleanVar(value=True)
+        self.add_mm_row = tk.Frame(self.format_panel, bg="#eff6ff")
+        tk.Checkbutton(
+            self.add_mm_row,
+            text="Add Osprey's macromolecules and lipids (fit_makeBasis addMMFlag)",
+            variable=self._add_mm_var,
+            font=("Helvetica", 10), bg="#eff6ff", fg="#111827",
+            activebackground="#eff6ff", cursor="hand2"
+        ).pack(anchor="w")
+        tk.Label(
+            self.add_mm_row, text="the .mat file only; H2O is added either way",
+            font=("Helvetica", 9), bg="#eff6ff", fg="#6b7280"
+        ).pack(anchor="w", padx=(24, 0))
+
     def _build_info_panel(self):
         self.info_panel = tk.Frame(
             self.scroll_frame, bg="#fefce8",
@@ -204,6 +221,12 @@ class Screen2Output(BaseScreen):
                 font=("Helvetica", 9), bg="#eff6ff", fg="#6b7280"
             ).pack(side="left")
 
+        if tool['id'] == 'osprey':
+            self._add_mm_var.set(True)
+            self.add_mm_row.pack(fill="x", pady=(8, 0))
+        else:
+            self.add_mm_row.pack_forget()
+
         self.format_panel.pack(fill="x", pady=(8, 0))
 
     def _hide_format_panel(self):
@@ -212,6 +235,11 @@ class Screen2Output(BaseScreen):
             self._hide_info_panel()
 
     ############## Selection handlers #############
+
+    def reset(self):
+        """Back to start-up: no tool picked, Next disabled (screen 4's New conversion)."""
+        if self.selected_tool:
+            self._on_tool_selected(self.selected_tool)   # its card clicked again: picked off
 
     def _on_tool_selected(self, tool):
         # Deselect previous
@@ -239,38 +267,56 @@ class Screen2Output(BaseScreen):
         for c in card.winfo_children():
             c.config(bg="#dbeafe")
 
-        # Tools that generate scripts/priors rather than basis set files
+        # Tools that get a prior knowledge file rather than basis set files
         INFO_TOOLS = {
             'oxsa': (
-                "OXSA — MATLAB script output",
-                "Selecting OXSA will produce a pre-configured run_oxsa_amares.m "
-                "script with your metabolite names, PPM positions, linewidth bounds "
-                "and relative amplitudes already filled in from your basis set. "
-                "Open the script in MATLAB, set your OXSA path and subject file, and run."
+                "OXSA — prior knowledge output",
+                "Selecting OXSA will produce PK_<set>.m, a prior knowledge function in "
+                "OXSA's own form, with each metabolite's lines from the basis set tied to "
+                "its largest one, and one phase and one linewidth for the whole set: only "
+                "the amplitudes are free for each metabolite. Broad humps are their own "
+                "components, or left out and named in the file where these do not rebuild "
+                "them. OXSA cannot tie chemical shifts, so they are fixed: align the data "
+                "to the basis set first. The file's header shows the AMARES.amaresFit call."
             ),
             'vespa_analysis': (
                 "VeSPA Analysis — prior XML output",
-                "Selecting VeSPA Analysis will produce a VIFF XML prior file "
-                "loadable via 'Basis Set from File' in VeSPA Analysis. "
-                "Peak positions are taken from literature chemical shifts "
-                "and areas from the simulated FID at your echo time."
+                "Selecting VeSPA Analysis will produce a VIFF XML prior file for the Voigt "
+                "tab's 'Basis Set from File...', with each metabolite's lines fitted from "
+                "the basis set (ppm, area and phase), the areas on the source's scale; "
+                "VeSPA's fit adds the lineshape. Broad humps (macromolecules, lipids) are "
+                "left out and named in the file: model them with VeSPA's own macromolecule "
+                "model."
             ),
             'pyamares': (
                 "PyAMARES — CSV prior output",
-                "Selecting PyAMARES will produce a CSV prior knowledge file "
-                "with metabolite names and dominant peak PPM positions "
-                "estimated from the basis set."
+                "Selecting PyAMARES will produce a CSV prior knowledge file with "
+                "each metabolite's lines from the basis set tied to its largest one, "
+                "and one phase, one lineshape and one shift for the whole set on the "
+                "largest singlet's peak: only the amplitudes are free for each "
+                "metabolite. Broad humps are their own components, or left out and named "
+                "in the file where these do not rebuild them. Fit with the MHz, carrier "
+                "and deadtime its first line states, and truncate_initial_points=1 where "
+                "the data's first point is not the FID at t = 0. The fit takes minutes; "
+                "lmfit's uncertainty step after it takes hours for the many tied peaks."
             ),
             'midas': (
                 "MIDAS — prior XML output",
-                "Selecting MIDAS will produce a FITT_Generic_XML prior file "
-                "compatible with the MIDAS FITT2 application. "
-                "Peak positions and relative areas are derived from the basis set."
+                "Selecting MIDAS will produce a FITT_Generic_XML prior file for MIDAS's "
+                "FITT2, as VeSPA-Simulation exports one, with the VeSPA prior's lines: "
+                "each metabolite's lines fitted from the basis set (ppm, area and phase), "
+                "the areas on the source's scale; the fit adds the lineshape. Broad humps "
+                "are left out and named in the file: model them with the fit's own "
+                "macromolecule or baseline model."
             ),
             'gava': (
                 "GAVA — text prior output",
-                "Selecting GAVA will produce a tab-separated text prior file "
-                "with metabolite peak positions and areas from the basis set."
+                "Selecting GAVA will produce a tab-separated text prior file, as "
+                "VeSPA-Simulation exports one, with the VeSPA prior's lines: each "
+                "metabolite's lines fitted from the basis set (ppm, area and phase), the "
+                "areas on the source's scale; the fit adds the lineshape. Broad humps are "
+                "left out and named in the file: model them with the fit's own "
+                "macromolecule or baseline model."
             ),
         }
 
@@ -329,4 +375,8 @@ class Screen2Output(BaseScreen):
         self.state['output_tool']    = self.selected_tool['name']
         self.state['output_tool_id'] = self.selected_tool['id']
         self.state['output_format']  = self.selected_format or 'default'
+        if self.selected_tool['id'] == 'osprey':
+            self.state['add_mm'] = self._add_mm_var.get()
+        else:
+            self.state.pop('add_mm', None)
         self.app.show_screen("screen3")

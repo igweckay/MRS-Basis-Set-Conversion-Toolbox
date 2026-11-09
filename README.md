@@ -75,7 +75,7 @@ A sample basis set from each tool is included in the "sample_basis_sets" folder.
 |------|--------|-------|
 | PyAMARES | `.csv priors` | Peak list CSV |
 | VeSPA Analysis | `.xml priors` | VIFF XML format |
-| OXSA | `.m script` | Pre-configured MATLAB script |
+| OXSA | `.m priors` | `PK_<set>.m` prior knowledge function |
 
 <h1>Citation</h1>
 If you use this toolbox in your research, please cite:

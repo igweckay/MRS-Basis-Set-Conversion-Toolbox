@@ -9,7 +9,7 @@ Format confirmed from FID-A io_writejmrui.m (CIC-methods/FID-A, GitHub).
 
 Header fields:
     jMRUI Data Textfile
-    Filename            : output file path
+    Filename            : the file's own name, without its folders (as FSL-MRS writes it)
     PointsInDataset     : n (number of FID points)
     DatasetsInFile      : 1
     SamplingInterval    : dwell time in ms  (= 1000 / SW)
@@ -113,7 +113,7 @@ def write_jmrui(
     with open(outpath, 'w') as f:
         ######################## Header #######################
         f.write('jMRUI Data Textfile')
-        f.write(f'\n\nFilename: {outpath}')
+        f.write(f'\n\nFilename: {os.path.basename(outpath)}')   # not the user's folders
         f.write(f'\n\nPointsInDataset: {n}')
         f.write(f'\nDatasetsInFile: 1')
         f.write(f'\nSamplingInterval: {dwelltime * 1000:.6E}')   # ms
