@@ -13,7 +13,7 @@ The MRS Basis Set Conversion Toolbox allows users to convert their basis sets fo
 </p>
 
 <h1>Installation Requirements</h1>
-Prerequisites (Python >= 3.9, tkinter), mat73, nibabel, spec2nii. All can be downloaded by running the requirements.txt file using the command below.
+Prerequisites (Python >= 3.10, tkinter), mat73, nibabel, spec2nii. All can be downloaded by running the requirements.txt file using the command below.
 
 ```bash
 pip install -r requirements.txt
@@ -23,8 +23,32 @@ pip install -r requirements.txt
 Once you have cloned or downloaded the repository, all that is required to launch the gui is typing the following command in terminal.
 
 ```bash
-python main.py
+python basis_converter/main.py
 ```
+
+To convert from a script instead, run from the repository root:
+
+```python
+import sys; sys.path.insert(0, "basis_converter")
+from core.detect import detect_format
+from core.load import load_basis
+from core.write import write_basis
+
+files = ["sample_basis_sets/JMRUI/NAA.txt", "sample_basis_sets/JMRUI/Cr391.txt"]
+basis = load_basis(files, detect_format(files)["format"])
+write_basis(basis, "lcmodel", "basis", "out/", te=30, seq="PRESS")
+```
+
+The tool ids are listed in `basis_converter/core/formats.py`. Each writer in `basis_converter/writers/` also runs from the command line; run one without arguments to see its usage.
+
+<h1>Tests</h1>
+
+```bash
+pip install pytest
+python -m pytest tests
+```
+
+They also run on GitHub for every pull request, on Linux, macOS and Windows.
 
 <h1>MATLAB Helper Scripts</h1>
 save_spinach_basis.m -> for SpinWizard/Spinach users
@@ -51,7 +75,7 @@ A sample basis set from each tool is included in the "sample_basis_sets" folder.
 | QUEST | `.txt folder` | Same format as jMRUI |
 | TARQUIN | `.BASIS` | LCModel-compatible |
 | ProFit | `.mat` | MATLAB struct |
-| NIfTI-MRS | `.nii.gz` | Requires spec2nii and FSL-MRS |
+| NIfTI-MRS | `.nii.gz` | Requires spec2nii |
 | JET | SpinWizard format | No file extension |
 | MIDAS | `.xml priors` | FITT_Generic_XML format |
 | GAVA | `.txt priors` | Tab-separated text |
