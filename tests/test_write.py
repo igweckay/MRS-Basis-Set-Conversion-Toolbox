@@ -1354,6 +1354,41 @@ def test_nifti_mrs_holds_the_fids_as_fsl_mrs_reads_them(tmp_path):
     for b, c in zip(basis, load_basis(written, detect_format(written)['format'])):
         assert np.allclose(c['fid'], b['fid'], atol=1e-4 * np.abs(b['fid']).max())
 
+def test_nifti_mrs_states_the_frequency_in_mhz_and_reads_hz_too(tmp_path):
+    """NIfTI-MRS states SpectrometerFrequency in MHz. spec2nii's raw route, which the writer
+    runs, stores the .raw's HZPPPM times 1e6, which is Hz (FSL-MRS guesses the unit; Osprey and
+    spant take MHz): the writer corrects it, the sample set states MHz, and the reader takes a
+    file stating Hz, such as one written before, as well."""
+    import json
+    import nibabel as nib
+
+    def stated(path):
+        ext = next(e for e in nib.load(path).header.extensions if e.get_code() == 44)
+        return json.loads(ext.get_content())['SpectrometerFrequency']
+
+    naa = _jmrui()[:1]
+    written = write_basis(naa, 'niftimrs', 'default', str(tmp_path))
+    assert stated(written[0]) == [pytest.approx(naa[0]['sf'])] and naa[0]['sf'] < 1e3
+    assert stated(os.path.join(SAMPLES, 'NIFTI-MRS', 'NAA.nii.gz')) == [123.261801]
+
+    img = nib.load(written[0])
+    meta = json.loads(next(e for e in img.header.extensions if e.get_code() == 44).get_content())
+    meta['SpectrometerFrequency'] = [meta['SpectrometerFrequency'][0] * 1e6]
+    img.header.extensions.remove(next(e for e in img.header.extensions if e.get_code() == 44))
+    img.header.extensions.append(nib.nifti1.Nifti1Extension(44, json.dumps(meta).encode()))
+    nib.save(img, str(tmp_path / 'hz.nii.gz'))
+    for path in (written[0], str(tmp_path / 'hz.nii.gz')):
+        assert load_basis([path], 'NIfTI-MRS')[0]['sf'] == pytest.approx(naa[0]['sf']), path
+
+
+def test_nifti_mrs_writes_a_name_that_starts_with_a_dash(tmp_path):
+    """LCModel's own sets name creatine's CH2 -CrCH2; spec2nii's -f took such a name for an
+    option and the function was not written."""
+    basis = [dict(_jmrui()[0], name='-CrCH2')]
+    written = write_basis(basis, 'niftimrs', 'default', str(tmp_path))
+    assert [os.path.basename(p) for p in written] == ['-CrCH2.nii.gz']
+    assert [b['name'] for b in load_basis(written, 'NIfTI-MRS')] == ['-CrCH2']
+
 
 def test_the_nifti_mrs_samples_are_the_simulation_the_others_hold():
     """The NIfTI-MRS sample set is the conjugated files of the conj step: read, they are the

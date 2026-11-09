@@ -80,13 +80,16 @@ def read_niftimrs(path):
 
     sw = float(meta.get('SpectralWidth', 0))
 
-    # SpectrometerFrequency is in Hz — convert to MHz
-    # Stored as array e.g. [123261801.0]
+    # SpectrometerFrequency is in MHz by the standard, stored as an array, e.g. [123.261801].
+    # spec2nii's raw route (BasiC's writer until now, and the sample set) stored Hz, e.g.
+    # [123261801.0]; no 1H frequency is above 10 000 MHz, so a larger value is Hz.
     sf_raw = meta.get('SpectrometerFrequency',
                meta.get('TransmitterFrequency', 0))
     if isinstance(sf_raw, list):
         sf_raw = sf_raw[0]
-    sf = float(sf_raw) / 1e6   # Hz → MHz
+    sf = float(sf_raw)
+    if sf > 1e4:
+        sf /= 1e6   # Hz → MHz
 
     te_s = meta.get('EchoTime', None)
     te   = float(te_s) * 1000.0 if te_s is not None else None

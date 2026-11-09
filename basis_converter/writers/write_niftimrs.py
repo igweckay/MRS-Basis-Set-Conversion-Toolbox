@@ -23,7 +23,7 @@ Requirements:
 
 spec2nii parameters (hardcoded for now, made dynamic in screen 2):
     -n 1H           nucleus
-    -i {sf}         Larmor frequency in MHz
+    -i {sf}         Larmor frequency in MHz (spec2nii takes the .raw's HZPPPM instead, as Hz)
     -b {sw}         bandwidth in Hz
     -j              write JSON sidecar
     -f {name}       output filename stem
@@ -79,7 +79,7 @@ def write_niftimrs(basis_list, outdir, te=None):
                 nii_path = _run_spec2nii(raw_path, name, outdir, core)
 
                 ############### Step 3: conjugate, add the echo time and the linewidth ##############
-                _finish(nii_path, core.get('te') or te, core.get('linewidth'))
+                _finish(nii_path, core['sf'], core.get('te') or te, core.get('linewidth'))
 
                 output_paths.append(nii_path)
                 print(f"  Written: {os.path.basename(nii_path)}")
@@ -145,7 +145,7 @@ def _run_spec2nii(raw_path, name, outdir, core):
 
     spec2nii raw parameters:
         -n 1H           proton nucleus
-        -i {sf}         Larmor frequency in MHz
+        -i {sf}         Larmor frequency in MHz (spec2nii takes the .raw's HZPPPM instead, as Hz)
         -b {sw}         bandwidth in Hz
         -f {name}       output filename stem
         -j              write JSON sidecar
@@ -159,7 +159,7 @@ def _run_spec2nii(raw_path, name, outdir, core):
         '-n', '1H',
         '-i', f"{sf:.6f}",
         '-b', f"{sw:.1f}",
-        '-f', name,
+        f'--fileout={name}',             # '-f name' takes a name starting with '-' for an option
         '-j',
         '-o', outdir,
         raw_path,
@@ -184,11 +184,12 @@ def _run_spec2nii(raw_path, name, outdir, core):
 
 ############### Step 3: conjugate ##############
 
-def _finish(nii_path, te=None, linewidth=None):
+def _finish(nii_path, sf, te=None, linewidth=None):
     """
-    Conjugate the FIDs of spec2nii's file, as NIfTI-MRS holds them, and store the echo
-    time (ms) as EchoTime (s) in its header extension, and the linewidth (Hz) as BasisLinewidth,
-    a user-defined key (the standard defines none for it).
+    Conjugate the FIDs of spec2nii's file, as NIfTI-MRS holds them, and in its header extension
+    state SpectrometerFrequency in MHz, as the standard defines it (spec2nii's raw route stores
+    the .raw's HZPPPM times 1e6, which is Hz), the echo time (ms) as EchoTime (s), and the
+    linewidth (Hz) as BasisLinewidth, a user-defined key (the standard defines none for it).
     """
     import json
     import nibabel as nib
@@ -196,6 +197,7 @@ def _finish(nii_path, te=None, linewidth=None):
     img  = nib.load(nii_path)
     ext  = next(e for e in img.header.extensions if e.get_code() == 44)
     meta = json.loads(ext.get_content())
+    meta['SpectrometerFrequency'] = [float(sf)]
     if te:
         meta['EchoTime'] = float(te) / 1000.0
     if linewidth is not None:                  # a user-defined key, as the standard defines one
