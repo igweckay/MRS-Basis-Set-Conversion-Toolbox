@@ -235,6 +235,7 @@ class Screen1Upload(BaseScreen):
         Runs detection and updates the shared state.
         """
         self.state['files'] = paths
+        self.state.pop('params', None)   # typed for the set before, not for this one
 
         # Run format detection
         result = detect_format(paths)
@@ -987,7 +988,7 @@ class Screen1Upload(BaseScreen):
         for key in ['files', 'detected_format', 'detection_status',
                     'core', 'missing_fields', 'ambiguous_options',
                     'compatible_tools', 'format_confirmed',
-                    'uploaded_files', 'basis_sets', 'set_picked']:
+                    'uploaded_files', 'basis_sets', 'set_picked', 'params']:
             self.state.pop(key, None)
         self._clear_result()
         self._disable_next()

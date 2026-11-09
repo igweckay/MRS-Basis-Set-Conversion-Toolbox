@@ -10,7 +10,8 @@ skipped likewise; screen 4 writes the .mat with its widgets stubbed out, as for 
 step bar. Several basis sets in one folder: screen 1 is built on a Tk root shown fully
 transparent, as Aqua's Tk 8.6 sends no events to a window never shown, given each folder and
 one of its sets picked, skipped likewise. New conversion: main.App is built
-hidden, converts, and is reset, skipped likewise. A failed conversion and a VeSPA export:
+hidden, converts, and is reset, skipped likewise; a second upload after Back or Clear
+forgets what was typed for the first, likewise. A failed conversion and a VeSPA export:
 main.App is built hidden and screen 4 converts, skipped likewise; these three also check that
 the conversion thread never calls Tk.
 
@@ -631,6 +632,74 @@ def test_new_conversion_starts_from_an_empty_screen_1_and_screen_4_wants_files(t
                              'back after': 'normal',
                              'error': 'No input files to convert. Go back to screen 1 and upload a basis set.'}
     assert seen['tk off the main thread'] == []
+
+
+PARAMS_FORGOTTEN = """
+import json
+import os
+import tkinter as tk
+
+from core.formats import ALL_TOOLS
+from main import App
+
+try:
+    app = App()
+except tk.TclError as error:
+    print(error)
+    raise SystemExit(3)
+app.withdraw()
+show = app.show_screen
+app.show_screen = lambda name: None if name == 'screen4' else show(name)   # Convert, but no conversion
+screen1, screen2, screen3 = (app.screens[name] for name in ('screen1', 'screen2', 'screen3'))
+samples = os.path.join('..', 'sample_basis_sets')
+jmrui = [os.path.join(samples, 'JMRUI', f) for f in ('NAA.txt', 'Cr391.txt')]       # states no TE
+stated = [os.path.join(samples, 'LCModel', 'BASIS_file',
+                       'LCModel_Siemens_UnEdited_sLASER_105_.BASIS')]              # states TE 105
+
+
+def typed(te):
+    screen1._load_files(jmrui)
+    app.show_screen('screen2')
+    if not screen2.selected_tool:                 # picking the picked tool again unpicks it
+        screen2._on_tool_selected(next(t for t in ALL_TOOLS if t['id'] == 'lcmodel'))
+    screen2._on_next()
+    screen3._entries['te'].set(te)
+    screen3._on_convert()
+    return app.state['core'].get('te')
+
+
+def uploaded_again(cleared):
+    if cleared:
+        screen1._clear_all()
+    screen1._load_files(stated)
+    app.show_screen('screen2')
+    screen2._on_next()
+    screen3._on_convert()
+    return {'asked for': sorted(screen3._entries), 'te': app.state['core'].get('te'),
+            'params': app.state.get('params', {})}
+
+
+seen = {'typed': typed('99'), 'back': uploaded_again(cleared=False),
+        'typed again': typed('98'), 'clear': uploaded_again(cleared=True)}
+app.destroy()
+print(json.dumps(seen))
+"""
+
+
+@pytest.mark.skipif(importlib.util.find_spec('tkinter') is None, reason='no tkinter')
+def test_a_new_upload_forgets_the_parameters_typed_for_the_set_before():
+    """An echo time typed on screen 3 for a set that states none must not be written into the
+    next set uploaded, which states its own, when the user comes back to screen 1 by Back or by
+    Clear rather than by New conversion."""
+    run = run_hidden(PARAMS_FORGOTTEN)
+    if run.returncode == 3:
+        pytest.skip(f'Tk cannot open a window: {run.stdout.strip()}')
+
+    assert run.returncode == 0, run.stderr
+    seen = json.loads(run.stdout.splitlines()[-1])
+    assert seen['typed'] == 99.0 and seen['typed again'] == 98.0
+    assert seen['back'] == {'asked for': [], 'te': 105.0, 'params': {}}
+    assert seen['clear'] == {'asked for': [], 'te': 105.0, 'params': {}}
 
 
 CONVERTED = TK_WATCHED + """

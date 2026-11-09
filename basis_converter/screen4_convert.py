@@ -28,12 +28,25 @@ State written by this screen:
 
 import os
 import queue
+import subprocess
+import sys
 import tkinter as tk
 from tkinter import ttk, filedialog
 import threading
 import traceback
 
 from base_screen import BaseScreen
+
+
+
+def open_folder(path):
+    """Show the folder in the system's file browser."""
+    if sys.platform == 'win32':
+        os.startfile(path)
+    elif sys.platform == 'darwin':
+        subprocess.Popen(['open', path])
+    else:
+        subprocess.Popen(['xdg-open', path])
 
 
 POLL_MS = 50   # how often the main thread takes the conversion thread's updates
@@ -328,7 +341,7 @@ class Screen4Convert(BaseScreen):
         tk.Button(
             actions,
             text="📁  Open output folder",
-            command=lambda: os.system(f"open '{outdir}'"),
+            command=lambda: open_folder(outdir),
             relief="flat", bg="#dbeafe", fg="#1d4ed8",
             padx=12, pady=5, cursor="hand2"
         ).pack(side="left", padx=(0, 8))
