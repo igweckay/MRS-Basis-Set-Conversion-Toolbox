@@ -110,7 +110,6 @@ METAB_PPM_TABLE = {
                  2.676, 3.010, 3.210, 3.760, 3.936, 4.010],
     'MM09'    : [0.916],
     'NAA'     : [2.008, 4.382, 2.673, 2.486, 7.821],
-    'NAAG'    : [2.042, 4.128, 1.881, 2.049, 2.190, 2.180, 4.607, 2.721, 2.519],
     'PE'      : [3.976, 3.976, 3.216, 3.216],
     'sI'      : [3.340],
     'sl'      : [3.340],
@@ -382,26 +381,6 @@ def _flatten_omega_with_protons(omega, n_protons):
                 if p < 90:
                     result.append((p, n))
 
-    return result
-
-
-def _flatten_omega(omega):
-    """Recursively flatten nested Omega arrays to a flat list of floats."""
-    result = []
-    omega  = np.asarray(omega, dtype=object)
-    if omega.ndim == 0:
-        v = float(omega)
-        if v < 90:
-            result.append(v)
-    else:
-        for item in omega.ravel():
-            item = np.asarray(item, dtype=object)
-            if item.ndim == 0:
-                v = float(item)
-                if v < 90:
-                    result.append(v)
-            else:
-                result.extend(_flatten_omega(item))
     return result
 
 
