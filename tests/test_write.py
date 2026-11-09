@@ -9,6 +9,8 @@ Run from the repository root: python -m pytest tests
 import os
 import sys
 
+import pytest
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAMPLES = os.path.join(ROOT, 'sample_basis_sets')
 sys.path.insert(0, os.path.join(ROOT, 'basis_converter'))
@@ -1241,7 +1243,8 @@ def test_no_prior_writer_reads_peaks_off_the_spectrum_at_literature_shifts():
         assert not hasattr(write_vespa, helper), helper
         for f in os.listdir(folder):
             if f.endswith('.py'):
-                assert helper not in open(os.path.join(folder, f)).read(), (f, helper)
+                with open(os.path.join(folder, f), encoding='utf-8') as source:
+                    assert helper not in source.read(), (f, helper)
 
 
 def test_prior_writers_keep_a_stated_centre(tmp_path):
@@ -1501,10 +1504,10 @@ def test_a_profit_file_with_one_metabolite_is_profit(tmp_path):
     assert np.allclose(load_basis(written, found['format'])[0]['fid'], naa[0]['fid'])
 
 
+@pytest.mark.skipif(os.name == 'nt', reason="Windows ignores a folder's read-only bit")
 def test_a_writer_that_writes_nothing_says_so(tmp_path):
     """The writers that write a file per function carry on past one that fails, but not past all:
     into a folder that cannot be written, none is written, and they say so."""
-    import pytest
     for tool in ('fida', 'marss', 'mrscloud', 'fsLmrs', 'lcmodel'):
         outdir = tmp_path / tool
         outdir.mkdir()
@@ -1857,7 +1860,6 @@ def test_a_set_of_functions_without_signal_says_so_for_each_priors_writer(tmp_pa
     """A function that is all zeros has no lines; beside others it is skipped, but a set of
     only such functions has nothing to write, and the writer says why rather than numpy."""
     import numpy as np
-    import pytest
     basis = load_basis([os.path.join(SAMPLES, 'JMRUI', 'Lac.txt')], 'jMRUI .txt')
     basis[0]['fid'] = np.zeros_like(basis[0]['fid'])
     for tool in ('vespa_analysis', 'gava', 'midas', 'pyamares', 'oxsa'):
@@ -1880,7 +1882,6 @@ def test_a_singlet_without_signal_is_skipped_as_any_function_without_signal(tmp_
     """Cr391 all zeros has no line to measure the lineshape on: beside Lac it is skipped and the
     lineshape is Lac's; alone, the writer says there is no signal."""
     import numpy as np
-    import pytest
     folder = os.path.join(SAMPLES, 'JMRUI')
     basis = load_basis([os.path.join(folder, f'{n}.txt') for n in ('Cr391', 'Lac')], 'jMRUI .txt')
     basis[0]['fid'] = np.zeros_like(basis[0]['fid'])

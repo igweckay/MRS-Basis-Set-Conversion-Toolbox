@@ -7,8 +7,9 @@ stubbed out, so no display is needed. The parameters summary: screen 3 is built 
 hidden Tk root and typed into; the test is skipped when Tk cannot open a window.
 Osprey's macromolecules: screen 2 is built on a hidden Tk root and its tools picked,
 skipped likewise; screen 4 writes the .mat with its widgets stubbed out, as for the
-step bar. Several basis sets in one folder: screen 1 is built on a hidden Tk root, given
-each folder and one of its sets picked, skipped likewise. New conversion: main.App is built
+step bar. Several basis sets in one folder: screen 1 is built on a Tk root shown fully
+transparent, as Aqua's Tk 8.6 sends no events to a window never shown, given each folder and
+one of its sets picked, skipped likewise. New conversion: main.App is built
 hidden, converts, and is reset, skipped likewise. A failed conversion and a VeSPA export:
 main.App is built hidden and screen 4 converts, skipped likewise; these three also check that
 the conversion thread never calls Tk.
@@ -380,7 +381,8 @@ try:
 except tk.TclError as error:
     print(error)
     raise SystemExit(3)
-root.withdraw()
+root.attributes('-alpha', 0.0)       # shown, but not seen: Aqua's Tk 8.6 sends no events to a
+                                     # window never shown
 
 from core.load import load_basis
 from screen1_upload import Screen1Upload
@@ -409,6 +411,7 @@ def pick(name):
                and name in [str(v) for v in w.cget('values')])
     box.set(name)
     box.event_generate('<<ComboboxSelected>>')
+    root.update()
     seen = seen_now()
     seen['files'] = len(state['files'])
     seen['format'] = state['detected_format']
@@ -434,8 +437,11 @@ for folder, picks in ((('LCModel', 'BASIS_file'), ['SLASER_Siemens26.basis',
     state = {}
     screen = Screen1Upload(root, state, App())
     path = os.path.join(samples, *folder)
+    screen.pack()
     screen._load_files([os.path.join(path, f) for f in os.listdir(path)])
+    root.update()
     seen[folder[0]] = [seen_now()] + [pick(name) for name in picks]
+    screen.destroy()
 print(json.dumps(seen))
 """
 
