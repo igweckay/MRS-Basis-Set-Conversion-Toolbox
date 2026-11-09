@@ -1390,6 +1390,20 @@ def test_nifti_mrs_writes_a_name_that_starts_with_a_dash(tmp_path):
     assert [b['name'] for b in load_basis(written, 'NIfTI-MRS')] == ['-CrCH2']
 
 
+def test_priors_state_no_echo_time_for_a_set_that_states_none(tmp_path):
+    """The jMRUI sample states no echo time. The GAVA, MIDAS, PyAMARES and OXSA priors written
+    from it said TE 30 ms, the default of the FID formats; they now say none is stated. VeSPA's
+    <seqte> has to hold a number and keeps the default."""
+    for tool in ('gava', 'midas', 'pyamares', 'oxsa'):
+        (tmp_path / tool).mkdir()
+        text = open(write_basis(_jmrui(), tool, 'default', str(tmp_path / tool))[0]).read()
+        assert 'TE 30' not in text and 'TE: 30' not in text and 'TE 30.0' not in text, tool
+        if tool in ('gava', 'midas'):
+            assert 'TE: not stated' in text, tool
+        else:
+            assert ', TE ' not in text, tool
+
+
 def test_the_nifti_mrs_samples_are_the_simulation_the_others_hold():
     """The NIfTI-MRS sample set is the conjugated files of the conj step: read, they are the
     jMRUI sample's FIDs."""

@@ -122,31 +122,32 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=
         from writers.write_fida import write_fida_folder
         return write_fida_folder(basis_list, outdir)
 
-    # VeSPA's priors, VeSPA-Simulation's GAVA and MIDAS exports, PyAMARES' and OXSA's priors: te,
-    # as for every format
+    # VeSPA's priors, VeSPA-Simulation's GAVA and MIDAS exports, PyAMARES' and OXSA's priors: the
+    # echo time given or stated, as for every format; the comment of a set stating none says so
+    # (VeSPA's <seqte> needs a number, so VeSPA gets the 30 ms default)
 
     if tool_id == 'oxsa':
         from writers.write_oxsa import pk_name, write_oxsa
         out_file = os.path.join(outdir, pk_name(basis_list) + '.m')     # the function's own name
-        write_oxsa(basis_list, out_file, seqte=te, progress=progress)
+        write_oxsa(basis_list, out_file, seqte=stated_te, progress=progress)
         return [out_file]
 
     if tool_id == 'pyamares':
         from writers.write_pyamares import write_pyamares
         out_file = os.path.join(outdir, 'pyamares_priors.csv')
-        write_pyamares(basis_list, out_file, seqte=te, progress=progress)
+        write_pyamares(basis_list, out_file, seqte=stated_te, progress=progress)
         return [out_file]
 
     if tool_id == 'midas':
         from writers.write_midas import write_midas
         out_file = os.path.join(outdir, 'midas_priors.xml')
-        write_midas(basis_list, out_file, seqte=te, progress=progress)
+        write_midas(basis_list, out_file, seqte=stated_te, progress=progress)
         return [out_file]
 
     if tool_id == 'gava':
         from writers.write_gava import write_gava
         out_file = os.path.join(outdir, 'gava_priors.txt')
-        write_gava(basis_list, out_file, seqte=te, progress=progress)
+        write_gava(basis_list, out_file, seqte=stated_te, progress=progress)
         return [out_file]
 
     if tool_id in ('vespa_analysis', 'vespa_gen2'):

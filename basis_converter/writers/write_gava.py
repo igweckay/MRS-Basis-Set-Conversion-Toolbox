@@ -53,7 +53,7 @@ def write_gava(basis_list, outpath,
     ----------
     basis_list     : list of core struct dicts
     outpath        : str, full path for output .txt file
-    seqte          : float, echo time in ms
+    seqte          : float or None, echo time in ms; None: the set states none
     metablist_path : str or None, unused (GAVA's lines hold no spin count)
     progress       : callable or None, progress(text, sub) once a metabolite's lines are fitted
                      or it is left out (write_vespa.vespa_lines)
@@ -85,7 +85,7 @@ def write_gava(basis_list, outpath,
         f.write('\n'.join(lines))
 
     print(f"\n  Done. GAVA text: {os.path.basename(outpath)}")
-    print(f"  {len(found['metabolites'])} of {len(basis_list)} metabolites  TE={seqte} ms")
+    print(f"  {len(found['metabolites'])} of {len(basis_list)} metabolites  TE={f'{seqte} ms' if seqte else 'not stated'}")
 
 
 def source_name(basis_list):
@@ -122,7 +122,7 @@ def simulation_comments(basis_list, found, seqte):
          f"macromolecule or baseline model." if found['humps'] else '') +
         (f" No lines found for: {', '.join(found['skipped'])}." if found['skipped'] else ''))
 
-    lines = [f'TE: {float(seqte)} ms',
+    lines = [f'TE: {float(seqte)} ms' if seqte else 'TE: not stated',
              f'Metabolites: {len(found_names)} of {len(basis_list)}' +
              (f' (left out: {", ".join(out)})' if out else ''),
              '', 'Output Comment', '-' * 75]
