@@ -130,11 +130,20 @@ def read_osprey(path):
         v2 = False
     n_mets = int(_get(basis, 'nMets', path)) if v2 else 0
 
+    # Osprey's water, for its water-reference fit, follows the nMets metabolites and the
+    # macromolecules (fit_makeBasis); an H2O among the first nMets is a simulated metabolite,
+    # as MRSCloud's combined sets hold one
+    try:
+        n_mets_all = int(_get(basis, 'nMets', path))
+    except RuntimeError:
+        n_mets_all = 0
+
     given = _given(basis, fids_raw)
     if given:                                  # the set BasiC was given, as it was given
         names, n_of, fids_raw, water = given
     else:
-        n_of, water = [n] * n_total, [name == 'H2O' for name in names]
+        n_of = [n] * n_total
+        water = [name == 'H2O' and i >= n_mets_all for i, name in enumerate(names)]
 
     ############## Build one core struct per metabolite #############
     results = []

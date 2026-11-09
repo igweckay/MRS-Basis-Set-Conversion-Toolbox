@@ -1403,6 +1403,67 @@ def test_priors_state_no_echo_time_for_a_set_that_states_none(tmp_path):
         else:
             assert ', TE ' not in text, tool
 
+def test_a_basis_exported_without_zero_filling_keeps_its_whole_fid():
+    """LCModel's makebasis zero-fills the FID to twice its length before the FFT it writes, so
+    the reader kept the first half of the inverse FFT. Osprey's and MRSCloud's .BASIS exports
+    write the FFT of the FID as it is: MRSCloud's sample has NDATAB 8192 for its 8192-point
+    FIDs, and the reader dropped their live second half. The whole FID is MRSCloud's own,
+    moved from 2.97 to 4.65 ppm; LCModel's own export still reads at half its NDATAB."""
+    import numpy as np
+    own = {b['name']: b for b in load_basis([os.path.join(SAMPLES, 'LCModel', 'BASIS_file',
+                                                          'LCModel_Siemens_UnEdited_sLASER_105_.BASIS')],
+                                            'LCModel .BASIS')}
+    assert {b['n'] for b in own.values()} == {8192} and {len(b['fid']) for b in own.values()} == {8192}
+    for name in ('NAA', 'Cr', 'Glu'):
+        cloud = load_basis([os.path.join(SAMPLES, 'MRSCLOUD', f'Siemens_UnEdited_sLASER_TE105_{name}.mat')],
+                           'MRSCloud .mat')[0]
+        t = np.arange(len(cloud['fid'])) / cloud['sw']
+        moved = cloud['fid'] * np.exp(-2j * np.pi * (4.65 - cloud['centerFreq']) * cloud['sf'] * t)
+        k = np.vdot(moved, own[name]['fid']) / np.vdot(moved, moved)
+        assert np.linalg.norm(own[name]['fid'] - k * moved) < 1e-3 * np.linalg.norm(own[name]['fid']), name
+        assert np.abs(own[name]['fid'][4096:]).max() > 0.01 * np.abs(own[name]['fid']).max(), name   # live
+
+    makebasis = load_basis([os.path.join(SAMPLES, 'LCModel', 'BASIS_file', 'SLASER_Siemens26.basis')],
+                           'LCModel .BASIS')
+    assert {b['n'] for b in makebasis} == {2048}
+
+
+def test_the_raw_reader_takes_fortran_numbers_without_a_leading_digit(tmp_path):
+    """Fortran writes a value below one as -.53122E+02 as readily as -0.53122E+02, and some
+    compilers write D for the exponent; the reader dropped such values and then failed to pair
+    the rest."""
+    from readers.read_lcmodel import read_lcmodel_raw
+    path = tmp_path / 'odd.raw'
+    path.write_text(" $SEQPAR\n HZPPPM= 123.26\n DELTAT= 0.00025\n NUNFIL= 4\n $END\n $NMID\n ID='odd'\n"
+                    " FMTDAT='(8E13.5)'\n VOLUME= 1.0\n TRAMP= 1.0\n $END\n"
+                    "  -.53122E+02  .12345E+01 -0.10000E+01  2.5D+00\n  .50000E+00 -.25000E+00  1.0  -1.\n")
+    fid = read_lcmodel_raw(str(path))['fid']
+    assert len(fid) == 4
+    assert fid[0] == -53.122 - 1.2345j and fid[1] == -1.0 - 2.5j
+    assert fid[2] == 0.5 + 0.25j and fid[3] == 1.0 + 1.0j
+
+
+def test_an_h2o_among_a_set_s_metabolites_is_not_osprey_s_water():
+    """Osprey's water, for its water-reference fit, follows the nMets metabolites in its .mat;
+    MRSCloud's combined sets hold a simulated H2O among their nMets. The reader took every H2O
+    for Osprey's, so the combined set lost its H2O in every other format while the same set
+    loaded from MRSCloud's single files kept it."""
+    combined = load_basis([os.path.join(SAMPLES, 'MRSCLOUD', 'BASIS_Siemens_UnEdited_sLASER_105_wMM.mat')],
+                          'Osprey .mat')
+    osprey = load_basis([os.path.join(SAMPLES, 'OSPREY', 'ospreybasis_marss_to_cows_26.mat')], 'Osprey .mat')
+    assert [b.get('water_ref', False) for b in combined if b['name'] == 'H2O'] == [False]
+    assert [b.get('water_ref', False) for b in osprey if b['name'] == 'H2O'] == [True]
+
+def test_a_spinwizard_folder_loads_as_detect_format_takes_it():
+    """detect_format takes a SpinWizard folder as one path and names the format; load_basis
+    took that one path for a file and found none. A script following the one is served by the
+    other."""
+    folder = os.path.join(SAMPLES, 'SPINWIZARD')
+    fmt = detect_format([folder])['format']
+    assert 'SpinWizard' in fmt
+    files = [os.path.join(folder, f) for f in sorted(os.listdir(folder))]
+    assert [b['name'] for b in load_basis([folder], fmt)] == [b['name'] for b in load_basis(files, fmt)]
+
 
 def test_the_nifti_mrs_samples_are_the_simulation_the_others_hold():
     """The NIfTI-MRS sample set is the conjugated files of the conj step: read, they are the

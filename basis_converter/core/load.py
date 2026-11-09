@@ -37,7 +37,7 @@ def load_basis(files, fmt, sw=None, sf=None):
         from readers.read_lcmodel import read_lcmodel_basis
         return read_lcmodel_basis(files[0])
 
-    if 'LCModel .raw' in fmt or 'MARSS .raw' in fmt:
+    if 'LCModel .raw' in fmt:
         from readers.read_lcmodel import read_lcmodel_raw
         return [read_lcmodel_raw(f, sw=sw, sf=sf) for f in files
                 if f.lower().endswith('.raw')]
@@ -92,6 +92,8 @@ def load_basis(files, fmt, sw=None, sf=None):
 
     if 'SpinWizard' in fmt:
         from readers.read_spinwizard import read_spinwizard_file, read_spinwizard_folder
+        if len(files) == 1 and os.path.isdir(files[0]):       # the folder, as detect_format takes it
+            return read_spinwizard_folder(files[0], sw=sw, sf=sf)
         if len(files) == 1:
             return [read_spinwizard_file(files[0], sw=sw, sf=sf)]
         return read_spinwizard_folder(os.path.dirname(files[0]), sw=sw, sf=sf)
