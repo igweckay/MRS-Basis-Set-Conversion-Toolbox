@@ -48,9 +48,9 @@ def test_a_basis_survives_a_round_trip(tmp_path):
                          for name in ('NAA.txt', 'Cr391.txt')], first)
     write_lcmodel_basis(read_lcmodel_basis(first), second)
 
-    # equal to print precision (6E13.5): the zero-filled half's rounding moves last digits
+    # equal in double precision (4E25.16)
     for a, b in zip(read_lcmodel_basis(first), read_lcmodel_basis(second)):
-        assert np.linalg.norm(a['fid'] - b['fid']) < 1e-5 * np.linalg.norm(a['fid'])
+        assert np.linalg.norm(a['fid'] - b['fid']) < 1e-13 * np.linalg.norm(a['fid'])
 
 
 def test_a_basis_is_read_by_its_detected_format_without_the_gui():
@@ -63,3 +63,88 @@ def test_a_basis_is_read_by_its_detected_format_without_the_gui():
 
     assert 'jMRUI' in found['format'] and [m['name'] for m in basis] == ['NAA', 'Cr391']
     assert 'tkinter' not in sys.modules
+
+
+def _peak_ppm(core, centre):
+    fid = np.asarray(core['fid']).ravel()
+    freq = np.fft.fftshift(np.fft.fftfreq(len(fid), 1 / core['sw']))
+    return centre + freq[np.argmax(np.abs(np.fft.fftshift(np.fft.fft(fid))))] / core['sf']
+
+
+def test_a_basis_stating_another_centre_keeps_its_peaks_where_they_are(tmp_path):
+    """Osprey's own basis sets put 3.0 ppm at 0 Hz; LCModel's is written for 4.65."""
+    naa = read_jmrui_file(os.path.join(SAMPLES, 'JMRUI', 'NAA.txt'))      # NAA at 2.01
+    moved = dict(naa, fid=naa['fid'] * np.exp(2j * np.pi * 1.65 * naa['sf']
+                                                 * np.arange(len(naa['fid'])) / naa['sw']),
+                 centerFreq=3.0)                                       # the same, at 3.0
+    out = str(tmp_path / 'naa.BASIS')
+    write_lcmodel_basis([moved, dict(naa, name='same')], out)
+
+    back = read_lcmodel_basis(out)
+
+    assert abs(_peak_ppm(moved, 3.0) - _peak_ppm(naa, 4.65)) < 0.01
+    assert [round(_peak_ppm(b, 4.65), 2) for b in back] == [round(_peak_ppm(naa, 4.65), 2)] * 2
+    from readers.read_lcmodel import read_lcmodel_raw
+    from writers.write_lcmodel import write_lcmodel_raw
+    write_lcmodel_raw(moved, str(tmp_path / 'naa.raw'))
+    raw = read_lcmodel_raw(str(tmp_path / 'naa.raw'))
+    assert round(_peak_ppm(raw, 4.65), 2) == round(_peak_ppm(naa, 4.65), 2)
+
+
+def test_an_mrscloud_v2_set_keeps_its_metabolites_and_mm_where_osprey_reads_them(tmp_path):
+    """MRSCloud's v2 sets put 4.68 ppm at 0 Hz for the metabolites, centerFreq for the MM and
+    lipids after them; Osprey reads them so (osp_recalculate_basis_specs)."""
+    import scipy.io as sio
+    from readers.read_osprey import read_osprey
+    sw, n, Bo = 4000.0, 2048, 2.89
+    sf, t = Bo * 42.577, np.arange(n) / sw
+    line = lambda ppm, centre: np.exp(2j * np.pi * (ppm - centre) * sf * t - t / 0.05)
+    fids = np.stack([line(2.008, 4.68), line(0.91, 3.0)], axis=1)
+    for version, ppms in (('v2', [2.008, 0.91]), ('v1', [2.008 - 4.68 + 3.0, 0.91])):
+        path = str(tmp_path / f'{version}.mat')
+        sio.savemat(path, {'BASIS': {
+            'fids': fids, 'name': np.array(['NAA', 'MM09'], dtype=object), 'nMets': 1,
+            'spectralwidth': sw, 'n': n, 'Bo': Bo, 'te': 30.0, 'seq': 'unedited',
+            'centerFreq': 3.0, 'mrsCloudVersion': version}})
+        out = str(tmp_path / f'{version}.BASIS')
+        write_lcmodel_basis(read_osprey(path), out)
+        back = read_lcmodel_basis(out)
+        assert np.allclose([_peak_ppm(b, 4.65) for b in back], ppms, atol=0.02), version  # a point is 0.016
+
+
+def _as_spant_reads(path):
+    """The header values spant's read_basis takes (R/basis_set.R): the third blank-separated
+    word of a line that starts with ' KEY = '; NDATAB's must be a bare integer."""
+    values = {}
+    with open(path) as f:
+        for line in f:
+            for key in ('NDATAB', 'HZPPPM', 'BADELT', 'FMTBAS', 'ID'):
+                if line.startswith(f' {key} = '):
+                    values.setdefault(key, []).append(line.split()[2])
+    return values
+
+
+def test_a_basis_is_written_as_spant_reads_it(tmp_path):
+    naa = read_jmrui_file(os.path.join(SAMPLES, 'JMRUI', 'NAA.txt'))
+    out = str(tmp_path / 'two.BASIS')
+    write_lcmodel_basis([naa, dict(naa, name='Cr')], out)
+
+    seen = _as_spant_reads(out)
+    assert int(seen['NDATAB'][0]) == 2 * len(naa['fid'])   # zero-filled, as MakeBasis
+    assert float(seen['HZPPPM'][0].rstrip(',')) == float(naa['sf'])
+    assert float(seen['BADELT'][0].rstrip(',')) == 1 / float(naa['sw'])
+    assert seen['FMTBAS'][0] == "'(4E25.16)',"
+    assert seen['ID'] == [f"'{naa['name']}',", "'Cr',"]
+
+
+def test_a_basis_is_written_in_the_fixed_columns_lcmodel_reads(tmp_path):
+    """FMTBAS (4E25.16) is a Fortran format: four fields of exactly 25 characters, which
+    LCModel reads by column, and spant and TARQUIN by the blanks between them."""
+    naa = read_jmrui_file(os.path.join(SAMPLES, 'JMRUI', 'NAA.txt'))
+    out = str(tmp_path / 'naa.BASIS')
+    write_lcmodel_basis([naa], out)
+
+    data = open(out).read().split('$END')[-1].splitlines()[1:]
+    assert all(len(line) % 25 == 0 and len(line) <= 100 for line in data)
+    columns = [float(line[i:i + 25]) for line in data for i in range(0, len(line), 25)]
+    assert columns == [float(v) for line in data for v in line.split()]

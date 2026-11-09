@@ -35,6 +35,12 @@ from datetime import datetime
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
+if __name__ == '__main__':                    # run as a script: find the writers package
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from writers.centre import at_centre
+
 
 PPM_CALIB = 4.65
 
@@ -48,7 +54,7 @@ def _get_peaks(basis_list, ppm_table):
         fid       = np.asarray(core['fid']).ravel()
         sf        = float(core.get('sf') or 123.26)
         sw        = float(core.get('sw') or 4000.0)
-        ppm_calib = float(core.get('ppmCalib') or VC)
+        ppm_calib = VC                           # (a ppmCalib is a label: MARSS's 4.675 sets are at 4.65)
         lit_lines = _get_lit_ppms(name, ppm_table)
         peaks     = _peaks_at_ppms(fid, sf, sw, lit_lines, ppm_calib=ppm_calib)
         if peaks:
@@ -73,6 +79,7 @@ def write_midas(basis_list, outpath,
     seqte          : float, echo time in ms
     metablist_path : str or None, path to metabList.mat
     """
+    basis_list = at_centre(basis_list)     # peaks are read off the spectrum at 4.65
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
 
@@ -160,8 +167,6 @@ def write_midas(basis_list, outpath,
 
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     if len(sys.argv) < 3:
         print("Usage: python write_midas.py <input_folder> <output.xml> [te_ms] [metabList.mat]")
         sys.exit(1)

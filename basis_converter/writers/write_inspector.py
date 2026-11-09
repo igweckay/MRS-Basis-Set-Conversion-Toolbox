@@ -20,8 +20,14 @@ import os
 import numpy as np
 import scipy.io as sio
 
+if __name__ == '__main__':                    # run as a script: find the writers package
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def write_inspector(basis_list, outpath, ppm_calib=4.675):
+from writers.centre import CENTRE, fid_at_centre
+
+
+def write_inspector(basis_list, outpath, ppm_calib=CENTRE):
     """
     Write all metabolites to a single INSPECTOR .mat file.
 
@@ -29,7 +35,7 @@ def write_inspector(basis_list, outpath, ppm_calib=4.675):
     ----------
     basis_list : list of core struct dicts
     outpath    : str, full path for output .mat file
-    ppm_calib  : float, water reference in ppm
+    ppm_calib  : float, water reference in ppm: 4.65, where the functions are written
     """
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
@@ -52,8 +58,8 @@ def write_inspector(basis_list, outpath, ppm_calib=4.675):
 
     for i, core in enumerate(basis_list):
         name = str(core.get('name', f'Metab_{i+1:02d}'))
-        lw   = float(core.get('linewidth', 1.5))
-        fid  = np.asarray(core['fid']).ravel().astype(complex)[:n]
+        lw   = 1.5 if core.get('linewidth') is None else float(core['linewidth'])
+        fid  = fid_at_centre(core).astype(complex)[:n]   # INSPECTOR states no ppm centre: read at 4.65
         names.append(name)
         linewidths.append(lw)
         fid_matrix[:len(fid), i] = fid
@@ -92,8 +98,6 @@ def write_inspector(basis_list, outpath, ppm_calib=4.675):
 
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     if len(sys.argv) < 3:
         print("Usage: python write_inspector.py <input_folder> <output_file>")
         sys.exit(1)

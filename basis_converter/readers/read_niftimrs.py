@@ -9,10 +9,14 @@ NIfTI-MRS have metabolites along one of the higher dimensions.
 
 Requires: nibabel  (pip install nibabel)
 
+NIfTI-MRS FIDs are the complex conjugate of a basis' own (as FSL-MRS reads them, NAA at
+2.01 ppm): they are conjugated on reading, as write_niftimrs conjugates them on writing.
+
 NIfTI-MRS header JSON extension contains:
     SpectralWidth        - bandwidth in Hz
     TransmitterFrequency - Larmor frequency in MHz
     EchoTime             - echo time in seconds (convert to ms)
+    BasisLinewidth       - linewidth in Hz, a user-defined key BasiC writes
     ResonantNucleus      - '1H'
     dim_5, dim_6, dim_7  - dimension labels (e.g. 'DIM_COIL', 'DIM_USER_0')
 
@@ -86,6 +90,8 @@ def read_niftimrs(path):
 
     te_s = meta.get('EchoTime', None)
     te   = float(te_s) * 1000.0 if te_s is not None else None
+    lw   = meta.get('BasisLinewidth')                        # a user-defined key: Value, Description
+    lw   = lw.get('Value') if isinstance(lw, dict) else lw
 
     if sw == 0:
         raise RuntimeError(
@@ -103,6 +109,8 @@ def read_niftimrs(path):
     # Squeeze spatial dims (should all be 1 for basis sets)
     # Remaining dims after t are coils/averages/metabolites
     data_squeezed = data.squeeze()   # shape: (n,) or (n, metabs) etc.
+    # NIfTI-MRS FIDs are the complex conjugate of a basis' own (write_niftimrs)
+    data_squeezed = np.conj(data_squeezed)
 
     # Derive name from filename stem (strip _conj suffix if present)
     stem = os.path.splitext(os.path.splitext(os.path.basename(path))[0])[0]
@@ -136,6 +144,7 @@ def read_niftimrs(path):
             'n'      : len(fid),
             'name'   : name,
             'te'     : te,
+            'linewidth': None if lw is None else float(lw),
             'source' : path,
         })
         _log(f"  Loaded: {name}")

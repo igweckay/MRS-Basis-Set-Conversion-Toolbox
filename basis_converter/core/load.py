@@ -104,6 +104,10 @@ def load_basis(files, fmt, sw=None, sf=None):
         from readers.read_gava import read_gava
         return read_gava(files[0])
 
+    if 'VeSPA' in fmt:
+        from readers.read_vespa import read_vespa
+        return read_vespa(files[0])
+
     raise RuntimeError(f"No reader available for format: {fmt}")
 
 

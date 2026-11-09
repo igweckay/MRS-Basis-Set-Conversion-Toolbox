@@ -12,27 +12,29 @@ Writes basis set to LCModel format:
      HZPPPM= {sf}        <- Larmor frequency in MHz (sf, already MHz)
      NUNFIL= {n}         <- number of complex points
      DELTAT= {1/sw}      <- dwell time in seconds
+     ECHOT= {te}         <- echo time in ms, where the function states one
     $END
     $NMID
      ID='{name}'
-     FMTDAT='(8E13.5)'
+     FMTDAT='(4E25.16)'
      VOLUME=   1.00000E+00
      TRAMP=    1.00000E+00
     $END
-    {real} {-imag} ...   <-  8 values per line, imaginary sign flipped
+    {real} {-imag} ...   <-  4 values per line, imaginary sign flipped, in double precision
 
-.BASIS file format (confirmed from your SLASER_Siemens26.basis):
+.BASIS file format (confirmed from your SLASER_Siemens26.basis), each header value as
+' KEY = value,', the form spant's read_basis takes, and NDATAB a bare integer:
     $SEQPAR
-     FWHMBA=  {linewidth}
-     HZPPPM=  {sf}
-     ECHOT=   {te}
-     SEQ='{seq}'
+     FWHMBA = {linewidth},
+     HZPPPM = {sf},
+     ECHOT = {te},
+     SEQ = '{seq}',
     $END
     $BASIS1
-     IDBASI='{description}'
-     FMTBAS='(6E13.5)'
-     BADELT=  {1/sw}
-     NDATAB=  {2n}
+     IDBASI = '{description}',
+     FMTBAS = '(4E25.16)',   <- double precision: 17 digits, where (6E13.5) keeps 6
+     BADELT = {1/sw},
+     NDATAB = {2n}
     $END
     For each metabolite:
         $NMUSED ... $END   ← fitting defaults
@@ -57,6 +59,12 @@ import os
 import numpy as np
 from datetime import datetime
 
+if __name__ == '__main__':                    # run as a script: find the writers package
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from writers.centre import fid_at_centre
+
 
 ####################### Main entry point #######################
 
@@ -70,7 +78,9 @@ def write_lcmodel(basis_list, outdir, mode='both',
     basis_list : list of core struct dicts
     outdir     : str, output directory
     mode       : 'raw' | 'basis' | 'both'
-    te         : float or None, echo time in ms
+    te         : float or None, echo time in ms for every file; if None, each .raw states its
+                 function's own (none if it states none), and the .BASIS the first the set
+                 states, else 30
     seq        : str, sequence name
     description: str or None, basis set description for .BASIS header
 
@@ -82,16 +92,17 @@ def write_lcmodel(basis_list, outdir, mode='both',
     """
     os.makedirs(outdir, exist_ok=True)
     result = {}
+    set_te = te if te is not None else next((c['te'] for c in basis_list if c.get('te')), None)
 
     if mode in ('raw', 'both'):
-        raw_files = write_lcmodel_raw_folder(basis_list, outdir)
+        raw_files = write_lcmodel_raw_folder([c if te is None else dict(c, te=te) for c in basis_list], outdir)
         result['raw_files'] = raw_files
 
     if mode in ('basis', 'both'):
         basis_path = os.path.join(outdir, 'basis_set.BASIS')
         write_lcmodel_basis(
             basis_list, basis_path,
-            te=te, seq=seq, description=description
+            te=30.0 if set_te is None else set_te, seq=seq, description=description
         )
         result['basis_file'] = basis_path
 
@@ -112,7 +123,7 @@ def write_lcmodel_raw(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid  = np.asarray(core['fid']).ravel()
+    fid  = fid_at_centre(core)
     sf   = float(core['sf'])          # MHz — already correct, do NOT divide
     sw   = float(core['sw'])          # Hz
     n    = len(fid)
@@ -130,20 +141,22 @@ def write_lcmodel_raw(core, outpath):
         f.write(f" HZPPPM= {sf:.6f}\n")
         f.write(f" NUNFIL= {n}\n")
         f.write(f" DELTAT= {dwell:.12f}\n")
+        if core.get('te'):
+            f.write(f" ECHOT= {float(core['te']):.7f}\n")
         f.write(" $END\n")
 
         # $NMID block
         f.write(" $NMID\n")
         f.write(f" ID='{name}'\n")
-        f.write(" FMTDAT='(8E13.5)'\n")
+        f.write(" FMTDAT='(4E25.16)'\n")
         f.write(" VOLUME=   1.00000E+00\n")
         f.write(" TRAMP=    1.00000E+00\n")
         f.write(" $END\n")
 
-        # FID data — 8 values per line
-        for i in range(0, len(vals), 8):
-            chunk = vals[i:i + 8]
-            f.write(" ".join(f"{v:+.5E}" for v in chunk) + "\n")
+        # FID data — 4 values per line, in FMTDAT's fixed 25-character fields
+        for i in range(0, len(vals), 4):
+            chunk = vals[i:i + 4]
+            f.write("".join(f"{v:25.16E}" for v in chunk) + "\n")
 
 
 def write_lcmodel_raw_folder(basis_list, outdir):
@@ -172,10 +185,13 @@ def write_lcmodel_raw_folder(basis_list, outdir):
             print(f"  Written: {name}.raw")
         except Exception as ex:
             failed.append(name)
+            reason = ex
             print(f"  WARNING: failed for {name} — {ex}")
 
     if failed:
         print(f"\n  {len(failed)} failed: {', '.join(failed)}")
+    if failed and not written:
+        raise RuntimeError(f"Nothing written: every basis function failed, the last with: {reason}")
     print(f"\n  Done. {len(written)} .raw files written to: {outdir}")
     return written
 
@@ -208,7 +224,14 @@ def write_lcmodel_basis(basis_list, outpath,
     n     = int(first.get('n', len(first['fid'])))
     dwell = 1.0 / sw
 
-    linewidth   = float(first.get('linewidth', 0.01))
+    # FWHMBA is in ppm, a basis' linewidth in Hz; a .BASIS read keeps the FWHMBA it stated (e.g. -1)
+    stated      = first.get('linewidth')
+    if stated is not None:
+        linewidth = float(stated) / sf
+    elif first.get('fwhmba') is not None:
+        linewidth = float(first['fwhmba'])
+    else:
+        linewidth = 0.01
     te_val      = float(te) if te is not None else 0.0
     date_str    = datetime.now().strftime('%d-%b-%Y')
     description = description or f"Basis set converted on {date_str}"
@@ -217,26 +240,26 @@ def write_lcmodel_basis(basis_list, outpath,
 
         ######################## $SEQPAR block #######################
         f.write(" $SEQPAR\n")
-        f.write(f" FWHMBA=  {linewidth:.8E},\n")
-        f.write(f" HZPPPM=  {sf:.6f}    ,\n")
-        f.write(f" ECHOT=  {te_val:.7f}    ,\n")
-        f.write(f" SEQ='{seq[:6]}',\n")   # LCModel truncates to 6 chars
+        f.write(f" FWHMBA = {linewidth:.8E},\n")
+        f.write(f" HZPPPM = {sf:.6f},\n")
+        f.write(f" ECHOT = {te_val:.7f},\n")
+        f.write(f" SEQ = '{seq[:6]}',\n")   # LCModel truncates to 6 chars
         f.write(" \n")
         f.write(" $END\n")
 
         ######################## $BASIS1 block #######################
         f.write(" $BASIS1\n")
-        f.write(f" IDBASI='{description[:80]}',\n")
-        f.write(" FMTBAS='(6E13.5)                                                                        ',\n")
-        f.write(f" BADELT=  {dwell:.8E},\n")
-        f.write(f" NDATAB=       {2 * n},\n")   # zero-filled to 2n, as MakeBasis
+        f.write(f" IDBASI = '{description[:80]}',\n")
+        f.write(" FMTBAS = '(4E25.16)',\n")
+        f.write(f" BADELT = {dwell:.8E},\n")
+        f.write(f" NDATAB = {2 * n}\n")   # zero-filled to 2n, as MakeBasis
         f.write(" \n")
         f.write(" $END\n")
 
         ######################## Per-metabolite sections #######################
         for core in basis_list:
             name = core.get('name', 'unknown')
-            fid  = np.asarray(core['fid']).ravel()
+            fid  = fid_at_centre(core)
 
             # $NMUSED block (fitting defaults — standard values)
             f.write(" $NMUSED\n")
@@ -282,27 +305,29 @@ def write_lcmodel_basis(basis_list, outpath,
 
             # $BASIS block
             f.write(" $BASIS\n")
-            f.write(f" ID='{name}',\n")
-            f.write(f" METABO='{name[:6]:<6}',\n")   # LCModel truncates to 6
-            f.write(" CONC=  1.00000000    ,\n")
-            f.write(" TRAMP=  1.00000000    ,\n")
-            f.write(" VOLUME=  1.00000000    ,\n")
-            f.write(" ISHIFT=          0,\n")
+            f.write(f" ID = '{name}',\n")
+            f.write(f" METABO = '{name[:6]:<6}',\n")   # LCModel truncates to 6
+            f.write(" CONC = 1.00000000,\n")
+            f.write(" TRAMP = 1.00000000,\n")
+            f.write(" VOLUME = 1.00000000,\n")
+            f.write(" ISHIFT = 0,\n")
             f.write(" \n")
             f.write(" $END\n")
 
             # Spectrum data — LCModel reads this block as the frequency-domain spectrum:
             # the orthonormal FFT of the FID in .raw orientation (imaginary sign flipped),
-            # zero-filled to 2n, as MakeBasis writes it. Interleaved real / imag, 6 per line.
+            # zero-filled to 2n, as MakeBasis writes it. Interleaved real / imag, 4 per line.
             spec = np.fft.fft(np.conj(fid), n=2 * len(fid), norm='ortho')
             vals = []
             for z in spec:
                 vals.extend([z.real, z.imag])
 
-            for i in range(0, len(vals), 6):
-                chunk = vals[i:i + 6]
-                # fixed-width fields, no separator: FMTBAS (6E13.5) reads 13 characters each
-                f.write("".join(f"{v:13.5E}" for v in chunk) + "\n")
+            for i in range(0, len(vals), 4):
+                chunk = vals[i:i + 4]
+                # fixed-width fields: FMTBAS (4E25.16) reads 25 characters each, in double
+                # precision; spant takes the count from FMTBAS's first digit and reads by blanks,
+                # TARQUIN reads a real and its imaginary part from one line
+                f.write("".join(f"{v:25.16E}" for v in chunk) + "\n")
 
     print(f"  Written: {os.path.basename(outpath)} "
           f"({len(basis_list)} metabolites)")
@@ -312,8 +337,6 @@ def write_lcmodel_basis(basis_list, outpath,
 
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     if len(sys.argv) < 3:
         print("Usage: python write_lcmodel.py <input_folder> <output_folder> [mode]")
         print()

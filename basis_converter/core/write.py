@@ -10,7 +10,7 @@ Used by the GUI (screen4_convert.py) and by scripts, without a GUI.
 import os
 
 
-def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
+def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None, add_mm=True):
     """
     Write basis functions using the appropriate writer.
 
@@ -20,40 +20,52 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
     tool_id    : str, a tool's 'id' in core.formats.ALL_TOOLS
     out_fmt    : str, one of that tool's format ids, or 'default'
     outdir     : str, the output folder
-    te         : float or None, echo time in ms (30 if None; 26 for OXSA)
+    te         : float or None, echo time in ms; if None, the one the set states, and where a
+                 format needs one and the set states none, 30 (26 for OXSA)
     seq        : str or None, sequence name ('unedited' if None)
+    add_mm     : bool, Osprey only: add Osprey's MM and lipids, as fit_makeBasis's addMMFlag
 
     Returns
     -------
     list of str, the paths written
+
+    An Osprey set's H2O is for Osprey's water-reference fit only: it is written to an Osprey .mat
+    and left out of every other format, Osprey's .BASIS and NIfTI-MRS among them, as Osprey's own
+    exporters leave it out (io_writelcmBASIS, io_writeTarquinBASIS).
     """
-    stated_te = te
-    te  = te or 30.0
+    if tool_id != 'osprey' or out_fmt in ('basis', 'nifti'):
+        basis_list = [b for b in basis_list if not b.get('water_ref')]
+    given_te = te
+    if te is not None:                     # the echo time given, in every format that holds one
+        basis_list = [dict(b, te=te) for b in basis_list]
+    stated_te = te if te is not None else next((b['te'] for b in basis_list if b.get('te')), None)
+    te  = stated_te or 30.0
     seq = seq or 'unedited'
 
     if tool_id == 'lcmodel':
         from writers.write_lcmodel import write_lcmodel
         result = write_lcmodel(basis_list, outdir,
                                mode=out_fmt if out_fmt in ('raw','basis','both') else 'both',
-                               te=te, seq=seq)
+                               te=given_te, seq=seq)
         paths = result.get('raw_files', []) + \
                 ([result['basis_file']] if 'basis_file' in result else [])
         return paths
 
     if tool_id in ('spant', 'abfit'):
-        # SPANT uses LCModel .raw format
-        from writers.write_lcmodel import write_lcmodel
-        result = write_lcmodel(basis_list, outdir,
-                               mode='raw' if out_fmt != 'nifti' else 'raw',
-                               te=te, seq=seq)
+        # spant and ABfit read LCModel's .BASIS (recommended) and .raw, and NIfTI-MRS
         if out_fmt == 'nifti':
             from writers.write_niftimrs import write_niftimrs
-            return write_niftimrs(basis_list, outdir)
-        return result.get('raw_files', [])
+            return write_niftimrs(basis_list, outdir, te=stated_te)
+        from writers.write_lcmodel import write_lcmodel
+        result = write_lcmodel(basis_list, outdir,
+                               mode='raw' if out_fmt == 'raw' else 'basis',
+                               te=given_te, seq=seq)
+        return result.get('raw_files', []) + \
+               ([result['basis_file']] if 'basis_file' in result else [])
 
     if tool_id == 'tarquin':
         from writers.write_lcmodel import write_lcmodel
-        result = write_lcmodel(basis_list, outdir, mode='basis', te=te, seq=seq)
+        result = write_lcmodel(basis_list, outdir, mode='basis', te=given_te, seq=seq)
         return [result.get('basis_file', '')]
 
     if tool_id == 'osprey':
@@ -61,12 +73,12 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
         out_file = os.path.join(outdir, 'basis.mat')
         if out_fmt == 'nifti':
             from writers.write_niftimrs import write_niftimrs
-            return write_niftimrs(basis_list, outdir)
+            return write_niftimrs(basis_list, outdir, te=stated_te)
         if out_fmt == 'basis':
             from writers.write_lcmodel import write_lcmodel
-            result = write_lcmodel(basis_list, outdir, mode='basis', te=te, seq=seq)
+            result = write_lcmodel(basis_list, outdir, mode='basis', te=given_te, seq=seq)
             return [result.get('basis_file', '')]
-        write_osprey(basis_list, out_file, te=float(te or 30))
+        write_osprey(basis_list, out_file, add_mm=add_mm, te=float(te or 30))
         return [out_file]
 
     if tool_id == 'fsLmrs':
@@ -85,7 +97,7 @@ def write_basis(basis_list, tool_id, out_fmt, outdir, te=None, seq=None):
 
     if tool_id == 'niftimrs':
         from writers.write_niftimrs import write_niftimrs
-        return write_niftimrs(basis_list, outdir)
+        return write_niftimrs(basis_list, outdir, te=stated_te)
 
     if tool_id == 'marss':
         from writers.write_marss import (write_marss_folder,

@@ -114,6 +114,7 @@ def read_fida_file(path, name=None):
         'seq'       : seq,
         'Bo'        : Bo,
         'linewidth' : linewidth,
+        'centerFreq': _centre(struct),
         'source'    : path,
     }
 
@@ -220,3 +221,19 @@ def _get_optional(struct, field, default=None):
         return _get(struct, field, '')
     except RuntimeError:
         return default
+
+
+def _centre(struct):
+    """The ppm at 0 Hz: the centerFreq the file states, as Osprey's fit_makeBasis takes it,
+    else that of the ppm axis it stores, or None. FID-A's frequency grid is symmetric about
+    0 Hz, so it is the axis' midpoint (4.65 in FID-A's own files, 2.97 in MRSCloud's, whose
+    basis sets are centred near 3.0 ppm as Osprey's are). For a file stating none, Osprey
+    takes 3.0 instead; the axis' 2.97 is what MRSCloud's own .BASIS export of its sets uses."""
+    stated = _get_optional(struct, 'centerFreq', default=None)
+    if stated is not None:
+        return float(np.asarray(stated, dtype=float).squeeze())
+    ppm = _get_optional(struct, 'ppm', default=None)
+    ppm = None if ppm is None else np.asarray(ppm, dtype=float).ravel()
+    if ppm is None or ppm.size < 2:
+        return None
+    return round(float(ppm[0] + ppm[-1]) / 2, 4)
