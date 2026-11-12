@@ -2,15 +2,39 @@
 writers/write_vespa.py
 Basis Set Converter — VeSPA Analysis writer
 
-Generates a VeSPA Analysis prior XML file using literature chemical
-shift values from metabList.mat (Omega field) as peak PPM locations.
+Generates a VeSPA Analysis prior XML file whose lines rebuild the basis set.
 
-This matches the approach used in marss_to_vespa_basis.xml:
-- Use metabList.mat Omega values as initial PPM locations
-- Relative areas estimated from FFT spectrum at those PPM positions
-- Phase estimated from complex spectrum at each peak
+VeSPA builds each metabolite's basis FID from its prior lines (common/mrs_prior.py,
+Prior.calculate_full_basis_set) with common/util/generic_spectral.py create_fid: every line
+is an undamped complex exponential,
 
-VeSPA prior format (confirmed from marss_to_vespa_basis.xml):
+    area * exp(1j * phase * pi / 180) * exp(1j * 2 pi * ppm2hz(ppm) * t),
+    ppm2hz(ppm) = sw / 2 - frequency * (ppm - resppm)            (analysis/mrs_dataset.py),
+
+area the amplitude at t = 0, phase in degrees, ppm absolute; the fit adds the lineshape. The
+sw / 2 is VeSPA's chop, (-1)**k; the rest runs opposite to a basis' own convention, where a
+line at ppm is at +sf * (ppm - centre) Hz (writers/centre.py): VeSPA's FID is the complex
+conjugate of BasiC's. So a line BasiC holds as c * exp(2 pi i f t) is written at
+ppm = centre + f / sf, area |c| and phase -angle(c) in degrees; rebuilt by create_fid it is
+the chopped conjugate of the BasiC line, the same spectrum on VeSPA's ppm axis.
+VeSPA-Simulation does the same: its prior lines are at -Fr ppm with phase -angle(I)
+(common/resources/pulse_sequences.xml:366, 373).
+
+So the lines are fitted as VeSPA rebuilds them (writers/lines.py, fit_lines): each
+metabolite's FID as undamped lines times the set's own lineshape, measured on its singlets
+(a 1 Hz Lorentzian in the jMRUI, LCModel TE 26, Osprey and MRSCloud samples), judged by how
+well that rebuilds the FID. The lineshape is not in the lines: VeSPA's fitted lineshape is the
+data's whole lineshape, not a broadening of the basis'. Lines fitted with their own dampings
+(HLSVD) and written without them were another shape: the 0.512 s MARSS-derived sets hold
+strongly coupled multiplets as components 2-13 Hz wide, and VeSPA drew them sharp (glucose
+78 % off). A function with no line of the set's
+lineshape (the samples' macromolecules and lipids, broad humps; MM09's 10 Hz singlet) is left
+out and named in the prior's comment, which points to VeSPA's own macromolecule model. The
+areas keep the source's scale for every metabolite (no normalisation), so fitted areas compare
+between metabolites as the source's FIDs do. seqte is the echo time the set states (or the one
+given to core.write).
+
+VeSPA prior format:
     <vespa_export version="1.0.0">
       <prior version="1.0.0">
         <nucleus>1H</nucleus>
@@ -18,27 +42,43 @@ VeSPA prior format (confirmed from marss_to_vespa_basis.xml):
         <prior_metabolite version="1.0.0">
           <name>NAA</name>
           <dim>0</dim><dim>0</dim><dim>0</dim>
-          <spins>N</spins>
+          <spins>5</spins>           ← the spins metabList lists (else the lines)
           <line>
             <group/>
-            <ppm>2.008</ppm>    ← from metabList Omega
-            <area>1.0</area>    ← normalized, dominant=1.0
-            <phase>...</phase>  ← from FFT at that ppm
+            <ppm>2.00799997</ppm>   ← the line's frequency, absolute ppm
+            <area>29.61939201</area> ← its amplitude at t = 0, the source's scale
+            <phase>3.216372</phase>  ← -(its phase), degrees (jMRUI sample's NAA CH3)
           </line>
         </prior_metabolite>
       </prior>
     </vespa_export>
+
+vespa_lines fits the set once and gives these lines; write_gava and write_midas write the same
+lines, as VeSPA-Simulation writes its simulation's lines to all three formats, and write_pyamares
+and write_oxsa tie them as AMARES peaks (with the humps' own components, which an AMARES peak can
+hold). The literature table is used here for spins only.
 """
 
 import os
+from collections import Counter
 import numpy as np
 from datetime import datetime
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import scipy.io as sio
 
+if __name__ == '__main__':                    # run as a script: find the writers package
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from writers.centre import CENTRE, at_centre
+from writers.lines import (TOL, decompose, fit_lines, fwhm, is_hump, unfilled,
+                           set_lineshape)
+
 
 ############## Literature chemical shift table (from metabList.mat) #############
+# One entry per spin of metabList's spin system (a methyl is one). write_vespa counts them
+# for <spins>.
 # Loaded dynamically from metabList.mat if available, otherwise uses hardcoded
 # values from the working marss_to_vespa_basis.xml
 
@@ -70,7 +110,6 @@ METAB_PPM_TABLE = {
                  2.676, 3.010, 3.210, 3.760, 3.936, 4.010],
     'MM09'    : [0.916],
     'NAA'     : [2.008, 4.382, 2.673, 2.486, 7.821],
-    'NAAG'    : [2.042, 4.128, 1.881, 2.049, 2.190, 2.180, 4.607, 2.721, 2.519],
     'PE'      : [3.976, 3.976, 3.216, 3.216],
     'sI'      : [3.340],
     'sl'      : [3.340],
@@ -78,15 +117,14 @@ METAB_PPM_TABLE = {
     'NAAG'    : [2.042, 4.128, 1.881, 2.049, 2.190, 4.607, 2.721, 2.519],
 }
 
-PPM_CALIB = 4.65   # default; overridden per-file from core['ppmCalib'] if present
-
 
 ############## Main entry point #############
 
 def write_vespa(basis_list, outpath,
                 seqte=26.0,
                 source='basis_set_converter',
-                metablist_path=None):
+                metablist_path=None,
+                progress=None):
     """
     Write a VeSPA Analysis prior XML file.
 
@@ -96,7 +134,9 @@ def write_vespa(basis_list, outpath,
     outpath        : str, full path for output .xml file
     seqte          : float, echo time in ms
     source         : str, source description
-    metablist_path : str or None, path to metabList.mat for literature shifts
+    metablist_path : str or None, path to metabList.mat (its numberOfProtons give <spins>)
+    progress       : callable or None, progress(text, sub) once a metabolite's lines are fitted
+                     or it is left out (the GUI's step list: a large set takes a while)
     """
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath) or '.', exist_ok=True)
@@ -104,8 +144,9 @@ def write_vespa(basis_list, outpath,
     if not basis_list:
         raise RuntimeError("basis_list is empty")
 
-    # Load metabList.mat if provided
     ppm_table = _load_metablist(metablist_path) if metablist_path else METAB_PPM_TABLE
+    counted = 'numberOfProtons summed from metabList.mat' if metablist_path else \
+              "the spins metabList's table lists (one per shift, a methyl as one)"
 
     timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
@@ -117,54 +158,50 @@ def write_vespa(basis_list, outpath,
     prior = ET.SubElement(root, 'prior', version='1.0.0')
     ET.SubElement(prior, 'source').text    = source
     ET.SubElement(prior, 'source_id').text = 'basis_set_converter'
-    ET.SubElement(prior, 'comment').text   = \
-        f'Prior information from basis set with {len(basis_list)} metabolites. ' \
-        f'PPM from literature (metabList), areas/phases from FFT.'
+    comment = ET.SubElement(prior, 'comment')
     ET.SubElement(prior, 'nucleus').text   = '1H'
     ET.SubElement(prior, 'seqte').text     = str(float(seqte))
 
-    for core in basis_list:
-        met_name = core.get('name', 'unknown')
-        fid      = np.asarray(core['fid']).ravel()
-        sf       = float(core.get('sf') or 123.26)
-        sw       = float(core.get('sw') or 4000.0)
-
-        # Get literature PPM positions for this metabolite
-        lit_ppms = _get_lit_ppms(met_name, ppm_table)
-
-        # Use ppmCalib from file if available (MARSS stores 4.675, not 4.65)
-        ppm_calib = float(core.get('ppmCalib') or PPM_CALIB)
-
-        # Get areas and phases at those PPM positions from FFT
-        peaks = _peaks_at_ppms(fid, sf, sw, lit_ppms, ppm_calib=ppm_calib)
-
-        if not peaks:
-            print(f"  WARNING: no peaks for {met_name} — skipping")
-            continue
-
-        # Normalize: dominant peak area = 1.0
-        max_area = max(a for _, a, _ in peaks)
-        if max_area > 0:
-            peaks = [(p, round(a / max_area, 12), ph) for p, a, ph in peaks]
+    found = vespa_lines(basis_list, progress)
+    listed, unlisted = [], []
+    for met_name, rows, _ in found['metabolites']:
+        lit = _get_lit_ppms(met_name, ppm_table)
+        spins = int(round(sum(n for _, n in lit))) if lit else len(rows)
+        (listed if lit else unlisted).append(met_name)
 
         met_elem = ET.SubElement(prior, 'prior_metabolite', version='1.0.0')
         ET.SubElement(met_elem, 'name').text  = met_name
         ET.SubElement(met_elem, 'dim').text   = '0'
         ET.SubElement(met_elem, 'dim').text   = '0'
         ET.SubElement(met_elem, 'dim').text   = '0'
-        ET.SubElement(met_elem, 'spins').text = str(len(peaks))
+        ET.SubElement(met_elem, 'spins').text = str(spins)
 
-        for ppm, area, phase in peaks:
+        for ppm, area, phase in rows:
             line = ET.SubElement(met_elem, 'line')
             ET.SubElement(line, 'group')
-            ET.SubElement(line, 'ppm').text   = f'{ppm:.6f}'
-            ET.SubElement(line, 'area').text  = f'{area}'
+            ET.SubElement(line, 'ppm').text   = f'{ppm:.8f}'
+            ET.SubElement(line, 'area').text  = f'{area:.10g}'
             ET.SubElement(line, 'phase').text = f'{phase:.6f}'
 
-        dom_ppm = peaks[0][0]
-        src = 'lit' if lit_ppms else 'fft'
-        print(f"  {met_name:15s}  {len(peaks):2d} peaks  "
-              f"dominant={dom_ppm:.4f} ppm  [{src}]")
+    humps, short = found['humps'], found['short']
+    comment.text = (
+        f'Prior information from basis set with {len(basis_list)} metabolites. '
+        f'Lines: each FID fitted as undamped lines times the set\'s lineshape, '
+        f'{found["lineshape"]}, as VeSPA rebuilds a basis FID from its lines and applies one '
+        f'lineshape in the fit: the fewest lines found that rebuild the FID to a relative '
+        f'residual of {TOL:g}; ppm, amplitude at t = 0 and phase of each. The lineshape is not '
+        f'in the lines: VeSPA\'s fitted lineshape is the data\'s whole lineshape. Areas in the '
+        f'source\'s scale, the same for every metabolite (factor 1). '
+        f'Phases in VeSPA\'s sign (the conjugate FID). '
+        f'Spins: {counted}' + (f' for {", ".join(listed)}' if unlisted and listed else '') +
+        (f'; the number of lines for {", ".join(unlisted)}' if unlisted else '') + '.' +
+        (f' Rebuilt only to: {", ".join(short)}.' if short else '') +
+        (f' No lines found for: {", ".join(found["skipped"])}.' if found['skipped'] else '') +
+        (f' Left out, as broad humps that hold no line of the set\'s lineshape (the prior\'s '
+         f'lines cannot hold them, and sharp lines in their place are wrong): {", ".join(humps)}. '
+         f'Model them with VeSPA\'s own macromolecule model (Voigt tab, macromolecule model '
+         f'"Single Basis Function - from Dataset"; analysis/block_fit_voigt.py:103, '
+         f'analysis/constants.py:548).' if humps else ''))
 
     # Write XML
     xml_str = minidom.parseString(
@@ -177,8 +214,114 @@ def write_vespa(basis_list, outpath,
     print(f"\n  Done. VeSPA prior XML: {os.path.basename(outpath)}")
     print(f"  {len(basis_list)} metabolites  TE={seqte} ms")
 
+def one_name_each(basis_list):
+    """Refuse a set naming two functions alike: VeSPA's importer keeps its metabolites by name
+    (mrs_prior.py), as PyAMARES and OXSA keep each function's rows, so the second one would take
+    the first one's place without a word."""
+    twice = sorted(n for n, k in Counter(str(c.get('name', 'unknown')) for c in basis_list).items() if k > 1)
+    if twice:
+        raise RuntimeError(f"The priors name each function's lines after it, and more than one function "
+                           f"is named {', '.join(twice)}: give each its own name first.")
 
-############## Helpers #############
+
+def vespa_lines(basis_list, progress=None, tol=TOL, hump=None):
+    """
+    The lines a VeSPA prior holds for each function of a set, as VeSPA-Simulation writes them to
+    its Analysis prior and to GAVA and MIDAS alike (dialog_mixed_metabolite_output.py: all three
+    take the simulation's same ppms, areas and phases): ppm absolute, area the amplitude at
+    t = 0 on the source's scale (factor 1), phase in degrees in VeSPA's sign, each rounded as
+    the prior writes it. The set's lineshape is measured once and every function fitted once,
+    to the relative residual `tol` (TOL for VeSPA, GAVA and MIDAS).
+
+    Returns a dict:
+        'metabolites' : [(name, [(ppm, area, phase), ...], residual)], the set's order
+        'humps'       : names left out as broad humps (no line of the set's lineshape)
+        'short'       : 'name (n lines, residual)' of those whose lines (at most MAX_LINES) rebuild
+                        them only to that residual
+        'skipped'     : names with no lines
+        'lineshape'   : the set's lineshape in words
+        'shape'       : the set's lineshape (lines.set_lineshape)
+        'components'  : each hump's HLSVD components (lines.decompose), by name
+    progress(text, sub), if given, is called before the functions are decomposed, with the
+    lineshape, and once a function. A writer
+    whose format can hold a hump's own widths (PyAMARES) passes hump(name, components): what to
+    report for it, or None where it is left out after all.
+    """
+    one_name_each(basis_list)
+    basis_list = at_centre(basis_list)     # the lines' ppm are read at CENTRE
+    points = [np.asarray(core['fid']).size for core in basis_list]     # the spectrum's, for is_hump
+    basis_list = [dict(core, fid=unfilled(core['fid'])) for core in basis_list]
+    names = [core.get('name', 'unknown') for core in basis_list]
+    if progress:                           # minutes for a set of long FIDs, before any line
+        progress("Decomposing each function", f"{len(names)} function{'s' * (len(names) > 1)}, "
+                                               f"then each one's lines are fitted")
+    decomposed = [decompose(np.asarray(core['fid']).ravel(), float(core.get('sw') or 4000.0))
+                  for core in basis_list]
+    shape = set_lineshape(basis_list, decomposed)
+    described = _describe(shape)
+    print(f"  Lineshape: {described}")
+    if progress:
+        progress("Lineshape of the set's lines", described)
+
+    found = {'metabolites': [], 'humps': [], 'short': [], 'skipped': [], 'lineshape': described,
+             'shape': shape, 'components': {}}
+    for count, (met_name, core, parts) in enumerate(zip(names, basis_list, decomposed), 1):
+        done = f"{count}/{len(names)}: {met_name}"
+        fid = np.asarray(core['fid']).ravel()
+        sf  = float(core.get('sf') or 123.26)
+        sw  = float(core.get('sw') or 4000.0)
+
+        if is_hump(parts, shape, sw / points[count - 1]):
+            # no line of the set's lineshape: written as lines, VeSPA would draw sharp ones
+            found['humps'].append(met_name)
+            found['components'][met_name] = parts
+            kept = hump(met_name, parts) if hump else None
+            if not kept:
+                print(f"  WARNING: {met_name} is a broad hump, not lines of the set's lineshape — left out")
+            if progress:
+                progress(f"Lines {done}", kept or
+                         "left out: a broad hump, not lines of the set's lineshape")
+            continue
+        lines = fit_lines(fid, sw, shape, tol, parts)
+        amp, freq = lines['amplitude'], lines['freq']
+        if not len(amp):
+            print(f"  WARNING: no lines for {met_name} — skipping")
+            found['skipped'].append(met_name)
+            if progress:
+                progress(f"Lines {done}", "no lines: skipped")
+            continue
+        if lines['residual'] > tol:
+            print(f"  WARNING: {len(amp)} lines rebuild {met_name} to {lines['residual']:.1e} only")
+            found['short'].append(f"{met_name} ({len(amp)} lines, {lines['residual']:.0e})")
+
+        # VeSPA's FID is BasiC's conjugate: the line at +f Hz is at CENTRE + f / sf ppm with
+        # phase -angle(c); rounded as the prior writes them, so every format holds one number
+        rows = [(round(CENTRE + f / sf, 8), float(f'{abs(c):.10g}'),
+                 round(-float(np.degrees(np.angle(c))), 6)) for c, f in zip(amp, freq)]
+        found['metabolites'].append((met_name, rows, lines['residual']))
+
+        print(f"  {met_name:15s}  {len(amp):3d} lines  "
+              f"largest={rows[0][0]:.4f} ppm  residual={lines['residual']:.1e}")
+        if progress:
+            progress(f"Lines {done}", f"{len(amp)} line{'s' * (len(amp) > 1)}, "
+                                      f"residual {lines['residual']:.1e}")
+    return found
+
+
+def _describe(shape):
+    """The set's lineshape in words, for the prior's comment."""
+    widths = {'Lorentzian': f"{shape['lorentz']:.3f} Hz", 'Gaussian': f"{shape['gauss']:.3f} Hz",
+              'Voigt': f"{shape['lorentz']:.3f} Hz Lorentzian, {shape['gauss']:.3f} Hz Gaussian"}
+    text = f"{shape['kind']} {widths[shape['kind']]}" + \
+        (f" (full width {fwhm(shape):.3f} Hz)" if shape['kind'] == 'Voigt' else '')
+    if shape['source'] == 'lines':
+        return text + ', no singlet found: the width of its narrowest lines'
+    singlets = ', '.join(shape['singlets'])
+    return text + (f', measured on {singlets}' + ('' if shape['uniform'] else
+                   ', which differ by more than 2 %'))
+
+
+############## Helpers: spins from metabList #############
 
 def _load_metablist(path):
     """Load PPM table from metabList.mat — returns dict of name → [(ppm, n_protons), ...]"""
@@ -241,26 +384,6 @@ def _flatten_omega_with_protons(omega, n_protons):
     return result
 
 
-def _flatten_omega(omega):
-    """Recursively flatten nested Omega arrays to a flat list of floats."""
-    result = []
-    omega  = np.asarray(omega, dtype=object)
-    if omega.ndim == 0:
-        v = float(omega)
-        if v < 90:
-            result.append(v)
-    else:
-        for item in omega.ravel():
-            item = np.asarray(item, dtype=object)
-            if item.ndim == 0:
-                v = float(item)
-                if v < 90:
-                    result.append(v)
-            else:
-                result.extend(_flatten_omega(item))
-    return result
-
-
 def _get_lit_ppms(name, table):
     """
     Get literature (ppm, n_protons) pairs.
@@ -282,125 +405,10 @@ def _get_lit_ppms(name, table):
     return []
 
 
-def _peaks_at_ppms(fid, sf, sw, lit_lines, ppm_calib=PPM_CALIB):
-    """
-    Get spectral amplitude and phase at specific PPM positions.
-    Uses the literature PPM as the peak location, reads amplitude
-    and phase from the FFT spectrum at that position.
-    """
-    fid   = np.asarray(fid).ravel()
-    n     = len(fid)
-    freq  = np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / sw))
-    ppm   = ppm_calib + freq / sf
-    spec  = np.fft.fftshift(np.fft.fft(fid))
-
-    # Extract just ppm values for phase correction reference
-    lit_ppms_only = [p for p, n in lit_lines] if lit_lines else []
-
-    # Find best zero-order phase by maximising the real part of the
-    # dominant peak — search over 720 steps for fine resolution
-    if lit_ppms_only:
-        ref_ppm  = lit_ppms_only[0]
-        win_mask = (ppm >= ref_ppm - 0.4) & (ppm <= ref_ppm + 0.4)
-    else:
-        win_mask = (ppm >= 0.5) & (ppm <= 4.3)
-
-    best_phi, best_max = 0.0, -np.inf
-    for phi_deg in np.linspace(0, 360, 721):
-        sr = np.real(spec * np.exp(1j * np.radians(phi_deg)))
-        mx = np.max(sr[win_mask]) if np.any(win_mask) else 0.0
-        if mx > best_max:
-            best_max = mx
-            best_phi = np.radians(phi_deg)
-
-    spec_phased = spec * np.exp(1j * best_phi)
-
-    # Use lit_ppms if available, else detect peaks
-    if lit_lines:
-        peaks = []
-
-        for p, n_prot in lit_lines:
-            if p >= 90:
-                continue
-
-            idx = np.argmin(np.abs(ppm - p))
-
-            # Sample real spectrum in a narrow window around lit ppm
-            # Use absolute value to handle negative peaks (dispersive components)
-            half_bins = max(2, int(round(n / (sw / sf) * 0.05)))
-            i0 = max(0, idx - half_bins)
-            i1 = min(n - 1, idx + half_bins)
-
-            win_r   = np.real(spec_phased[i0:i1+1])
-            win_c   = spec_phased[i0:i1+1]
-            win_ppm = ppm[i0:i1+1]
-
-            if len(win_r) > 0:
-                # Use abs to find peak even if phasing isn't perfect at this position
-                best_idx = np.argmax(np.abs(win_r))
-                area     = float(win_r[best_idx])
-                ph       = float(np.degrees(np.angle(win_c[best_idx])))
-                ppm_loc  = float(win_ppm[best_idx])
-            else:
-                area    = float(np.real(spec_phased[idx]))
-                ph      = float(np.degrees(np.angle(spec_phased[idx])))
-                ppm_loc = float(ppm[idx])
-
-            # Keep the peak even if area is small — preserve TE modulation
-            peaks.append((round(ppm_loc, 6), area, round(ph, 6)))
-
-        # Normalize to dominant peak = 1.0 using absolute areas
-        if peaks:
-            max_abs = max(abs(a) for _, a, _ in peaks)
-            if max_abs > 0:
-                peaks = [(p, round(a / max_abs, 12), ph) for p, a, ph in peaks]
-
-        # Sort by absolute area descending, keep positive peaks
-        peaks.sort(key=lambda x: -abs(x[1]))
-        peaks = [(p, a, ph) for p, a, ph in peaks if a > 0]
-        return peaks
-
-    # Fallback: FFT peak detection
-    return _fft_peaks(ppm, spec_phased, spec_phased)
-
-
-def _fft_peaks(ppm, spec_phased, spec_complex,
-               ppm_min=0.5, ppm_max=4.3, min_frac=0.05, max_peaks=20):
-    """Fallback: detect peaks from FFT."""
-    mask   = (ppm >= ppm_min) & (ppm <= ppm_max)
-    ppm_m  = ppm[mask]
-    spec_m = np.real(spec_phased[mask])
-    sc_m   = spec_complex[mask]
-
-    if len(spec_m) == 0 or np.max(spec_m) <= 0:
-        return []
-
-    threshold = np.max(spec_m) * min_frac
-    peaks = []
-
-    for i in range(1, len(spec_m) - 1):
-        if spec_m[i] > spec_m[i-1] and \
-           spec_m[i] > spec_m[i+1] and \
-           spec_m[i] > threshold:
-            y0, y1, y2 = spec_m[i-1], spec_m[i], spec_m[i+1]
-            denom  = 2.0 * (y0 - 2.0 * y1 + y2)
-            delta  = (y0 - y2) / denom if denom != 0 else 0.0
-            dp     = abs(ppm_m[1] - ppm_m[0]) if len(ppm_m) > 1 else 0.0
-            p_loc  = float(ppm_m[i] - delta * dp)
-            area   = float(y1)
-            phase  = float(np.degrees(np.angle(sc_m[i])))
-            peaks.append((round(p_loc, 6), round(area, 12), round(phase, 6)))
-
-    peaks.sort(key=lambda x: -x[1])
-    return peaks[:max_peaks]
-
-
 ############## Command line #############
 
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     if len(sys.argv) < 3:
         print("Usage: python write_vespa.py <input_folder> <output.xml> [te_ms] [metabList.mat]")
         sys.exit(1)

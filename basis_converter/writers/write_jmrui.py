@@ -9,7 +9,7 @@ Format confirmed from FID-A io_writejmrui.m (CIC-methods/FID-A, GitHub).
 
 Header fields:
     jMRUI Data Textfile
-    Filename            : output file path
+    Filename            : the file's own name, without its folders (as FSL-MRS writes it)
     PointsInDataset     : n (number of FID points)
     DatasetsInFile      : 1
     SamplingInterval    : dwell time in ms  (= 1000 / SW)
@@ -44,6 +44,12 @@ Derivations from core struct:
 import os
 import numpy as np
 from datetime import datetime
+
+if __name__ == '__main__':                    # run as a script: find the writers package
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from writers.centre import fid_at_centre
 
 
 ######################## Constants #######################
@@ -107,7 +113,7 @@ def write_jmrui(
     with open(outpath, 'w') as f:
         ######################## Header #######################
         f.write('jMRUI Data Textfile')
-        f.write(f'\n\nFilename: {outpath}')
+        f.write(f'\n\nFilename: {os.path.basename(outpath)}')   # not the user's folders
         f.write(f'\n\nPointsInDataset: {n}')
         f.write(f'\nDatasetsInFile: 1')
         f.write(f'\nSamplingInterval: {dwelltime * 1000:.6E}')   # ms
@@ -125,10 +131,10 @@ def write_jmrui(
         f.write('Signal and FFT\n')
         f.write('sig(real)\tsig(imag)\tfft(real)\tfft(imag)\n')
         f.write(f'Signal 1 out of 1 in file\n')
-        for row in RF:
+        for row in RF:                                  # in double precision: 17 digits
             f.write(
-                f'{row[0]:.8E}\t{row[1]:.8E}\t'
-                f'{row[2]:.8E}\t{row[3]:.8E}\n'
+                f'{row[0]:.16E}\t{row[1]:.16E}\t'
+                f'{row[2]:.16E}\t{row[3]:.16E}\n'
             )
 
 
@@ -190,7 +196,7 @@ def write_jmrui_folder(basis_list, outdir):
         name    = core.get('name', 'unknown')
         outpath = os.path.join(outdir, f"{name}.txt")
         txfrq   = float(core['sf']) * 1e6   # MHz → Hz
-        write_jmrui(core['fid'], core['sw'], txfrq, name, outpath)
+        write_jmrui(fid_at_centre(core), core['sw'], txfrq, name, outpath)
         written.append(outpath)
         print(f"  Written: {name}.txt")
     print(f"\n  Done. {len(written)} jMRUI files written to: {outdir}")
@@ -199,8 +205,6 @@ def write_jmrui_folder(basis_list, outdir):
 ######################## Command line usage #######################
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     if len(sys.argv) < 3:
         print("Usage: python write_jmrui.py <input_folder> <output_folder>")
         print()
@@ -231,7 +235,7 @@ if __name__ == '__main__':
     for core in basis_list:
         outpath = os.path.join(outdir, f"{core['name']}.txt")
         txfrq   = core['sf'] * 1e6   # MHz → Hz
-        write_jmrui(core['fid'], core['sw'], txfrq, core['name'], outpath)
+        write_jmrui(fid_at_centre(core), core['sw'], txfrq, core['name'], outpath)
         print(f"  Written: {core['name']}.txt")
 
     print(f"\nDone. {len(basis_list)} files written to: {outdir}")

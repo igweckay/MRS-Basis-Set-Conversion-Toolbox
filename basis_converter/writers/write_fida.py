@@ -40,6 +40,12 @@ import numpy as np
 import scipy.io as sio
 from datetime import datetime
 
+if __name__ == '__main__':                    # run as a script: find the writers package
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from writers.centre import CENTRE, fid_at_centre
+
 
 # Proton gyromagnetic ratio
 PROTON_GAMMA = 42577000.0   # Hz/T
@@ -60,7 +66,7 @@ def write_fida_file(core, outpath):
     outpath = os.path.abspath(outpath)
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
 
-    fid  = np.asarray(core['fid']).squeeze().astype(complex)
+    fid  = fid_at_centre(core).astype(complex)   # its ppm axis below is at 4.65
     sw   = float(core['sw'])
     sf   = float(core['sf'])          # MHz
     n    = int(core.get('n', len(fid)))
@@ -70,7 +76,8 @@ def write_fida_file(core, outpath):
     Bo        = core.get('Bo') or (sf / 42.577)
     txfrq     = sf * 1e6               # MHz → Hz
     dwelltime = 1.0 / sw
-    linewidth = float(core.get('linewidth', 1.0))
+    stated    = core.get('linewidth')          # stated as None when the source has none
+    linewidth = 1.0 if stated is None else float(stated)
     te        = float(core.get('te', 0.0)) if core.get('te') else 0.0
     seq       = str(core.get('seq', 'unedited'))
     date_str  = datetime.now().strftime('%d-%b-%Y')
@@ -129,7 +136,9 @@ def write_fida_file(core, outpath):
         'gamma'         : PROTON_GAMMA,
         't'             : t.reshape(-1, 1),
         'ppm'           : ppm.reshape(-1, 1),
-        'sz'            : np.array([n, 1]),
+        'centerFreq'    : CENTRE,              # Osprey's fit_makeBasis takes 3.0 when none is stated
+        'sz'            : np.array([n, 1], dtype=float),    # double, as MATLAB's size() is: integer
+                                                            # arithmetic on it rounds FID-A's axes
         'te'            : te,
         'seq'           : seq,
         'sim'           : 'converted',
@@ -164,14 +173,17 @@ def write_fida_folder(basis_list, outdir):
         outpath = os.path.join(outdir, f"{name}.mat")
         try:
             write_fida_file(core, outpath)
-            written.append(name)
+            written.append(outpath)
             print(f"  Written: {name}.mat")
         except Exception as ex:
             failed.append(name)
+            reason = ex
             print(f"  WARNING: failed for {name} — {ex}")
 
     if failed:
         print(f"\n  {len(failed)} failed: {', '.join(failed)}")
+    if failed and not written:
+        raise RuntimeError(f"Nothing written: every basis function failed, the last with: {reason}")
     print(f"\n  Done. {len(written)} FID-A files written to: {outdir}")
     return written
 
@@ -180,8 +192,6 @@ def write_fida_folder(basis_list, outdir):
 
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     if len(sys.argv) < 3:
         print("Usage: python write_fida.py <input_folder_or_file> <output_folder>")
         print()

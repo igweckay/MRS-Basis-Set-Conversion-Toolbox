@@ -6,12 +6,14 @@ Given a list of file paths, figures out what format they are,
 reads one file to extract real metadata, and returns it for display.
 
 Returns a dict with:
-    'status'            : 'full' | 'partial' | 'ambiguous' | 'failed'
+    'status'            : 'full' | 'partial' | 'ambiguous' | 'several' | 'failed'
     'format'            : string name, e.g. 'LCModel .BASIS'
     'ambiguous_options' : list of possible format strings (only if ambiguous)
     'data'              : dict — core struct with real extracted values
     'missing'           : list of field names not found
     'message'           : human-readable explanation
+    'sets'              : only if 'several' (the files hold more than one basis set):
+                          one detect_format result per set, with its 'name' and 'files'
 """
 
 import os
@@ -53,6 +55,11 @@ def _detect_format_inner(paths):
 
     extensions = set(os.path.splitext(p)[1].lower() for p in paths)
     n_files    = len(paths)
+
+    if n_files > 1:
+        result = _try_several_sets(paths)
+        if result:
+            return result
 
     if n_files == 1 and extensions == {'.basis'}:
         return _try_lcmodel_basis(paths[0])
@@ -151,6 +158,87 @@ def _detect_format_inner(paths):
     return _failed("File format not recognized.")
 
 
+############## Several basis sets in one selection #############
+
+# The variables a .mat file holds a whole set in: Osprey's (and MRSCloud's combined
+# BASIS_*.mat) BASIS, ProFit's basis, INSPECTOR's lcmBasis.
+WHOLE_SET_VARIABLES = {'BASIS', 'basis', 'lcmBasis', 'lcmbasis'}
+
+
+def _mat_variables(path):
+    """The names of a .mat file's variables, read without loading their data."""
+    try:
+        import scipy.io as sio
+        return {name for name, _, _ in sio.whosmat(path)}
+    except NotImplementedError:          # v7.3, an HDF5 file
+        try:
+            import h5py
+            with h5py.File(path, 'r') as f:
+                return set(f.keys())
+        except Exception:
+            return set()
+    except Exception:
+        return set()
+
+
+def _set_name(files):
+    """A set's name: its file, or the pattern its files share."""
+    if len(files) == 1:
+        return os.path.basename(files[0])
+    names  = [os.path.basename(f) for f in files]
+    prefix = os.path.commonprefix(names)
+    return f"{prefix}*{os.path.splitext(names[0])[1]}"
+
+
+def _try_several_sets(paths):
+    """
+    A selection holding more than one complete basis set: several .BASIS files, or
+    single-metabolite .mat files beside a .mat that holds a whole set (MRSCloud's
+    Siemens_..._TE105_*.mat and its BASIS_*.mat). Each .BASIS file and each whole-set
+    .mat is a set; the other .mat files together are one. Returns None for one set, or
+    when the selection holds other files, and then detection goes on as before.
+    """
+    exts = {os.path.splitext(p)[1].lower() for p in paths}
+    if not exts <= {'.basis', '.mat'}:
+        return None
+
+    groups  = [[p] for p in paths if p.lower().endswith('.basis')]
+    mats    = [p for p in paths if p.lower().endswith('.mat')]
+    singles = []
+    for p in mats:
+        if _mat_variables(p) & WHOLE_SET_VARIABLES:
+            groups.append([p])
+        else:
+            singles.append(p)
+    if singles:
+        groups.append(sorted(singles))
+    if len(groups) < 2:
+        return None
+
+    sets = []
+    for files in groups:
+        found = detect_format(files)
+        if found['status'] == 'failed':
+            continue
+        sets.append(dict(found, name=_set_name(files), files=files))
+    if len(sets) < 2:
+        return None
+    sets.sort(key=lambda s: s['name'].lower())
+
+    listed = '; '.join(f"{s['name']} ({s['format']}, "
+                       f"{len(s['data'].get('names') or [])} metabolites)" for s in sets)
+    return {
+        'status':           'several',
+        'format':           'Several basis sets',
+        'ambiguous_options': [],
+        'sets':             sets,
+        'data':             {},
+        'missing':          [],
+        'message':          f"These files hold {len(sets)} basis sets: {listed}. "
+                            f"Pick the one to convert.",
+    }
+
+
 ############## Detectors — each reads one file for real metadata #############
 
 def _try_lcmodel_basis(path):
@@ -245,6 +333,17 @@ def _try_niftimrs(path):
         return _failed(f"Could not read NIfTI-MRS file: {ex}")
 
 
+def _struct_keys(raw, keys):
+    """The fields of a .mat file's one variable, when it holds just one struct (MRSCloud
+    saves each metabolite as outA); none otherwise."""
+    if len(keys) != 1:
+        return set()
+    val = raw[next(iter(keys))]
+    if isinstance(val, dict):
+        return set(val.keys())
+    return set(getattr(getattr(val, 'dtype', None), 'names', None) or [])
+
+
 def _try_single_mat(path):
     """
     Inspect a single .mat file's fields to determine format.
@@ -275,15 +374,13 @@ def _try_single_mat(path):
 
     keys = set(k for k in raw if not k.startswith('_'))
 
-    ############## ProFit: has 'basis' key with cell array fid + f0 field #############
-    # Check before Osprey since both use a 'basis' key
+    ############## ProFit: has 'basis' key with fid, met, bw, f0 #############
+    # Check before Osprey since both use a 'basis' key. The fields tell it: the fid is a cell
+    # array only from two metabolites on, as a 1x1 cell loads as the array it holds.
     if 'basis' in keys:
         b = raw.get('basis', {})
         b_keys = set(b.keys()) if isinstance(b, dict) else set()
-        import numpy as np
-        fid_val = b.get('fid') if isinstance(b, dict) else None
-        is_cell = fid_val is not None and np.asarray(fid_val).dtype == object
-        if {'fid', 'met', 'bw', 'f0'}.issubset(b_keys) and is_cell:
+        if {'fid', 'met', 'bw', 'f0'}.issubset(b_keys):
             return _read_and_return_profit(path)
 
     ############## Osprey: has 'BASIS' key with fids, spectralwidth, name #############
@@ -297,13 +394,6 @@ def _try_single_mat(path):
     ############## INSPECTOR fallback: data, sw_h, sf at top level #############
     if {'data', 'sw_h', 'sf'}.issubset(keys):
         return _read_and_return_inspector(path)
-
-    ############## ProFit: has 'basis' key with fid (cell array), met, bw, f0 #############
-    if 'basis' in keys:
-        b = raw.get('basis', {})
-        b_keys = set(b.keys()) if isinstance(b, dict) else set()
-        if {'fid', 'met', 'bw', 'f0'}.issubset(b_keys):
-            return _read_and_return_profit(path)
 
     ############## ProFit fallback: top-level fid (cell), met, bw, f0 #############
     if {'fid', 'met', 'bw', 'f0'}.issubset(keys):
@@ -325,8 +415,8 @@ def _try_single_mat(path):
         if 'fids' in out_keys and 'txfrq' in out_keys:
             return _read_and_return_fida_single(path)
 
-    ############## MRSCloud: top-level fids + txfrq + Bo #############
-    if {'fids', 'txfrq', 'Bo'}.issubset(keys):
+    ############## MRSCloud: fids + txfrq + Bo, top-level or in the one struct it saves (outA) #############
+    if {'fids', 'txfrq', 'Bo'}.issubset(keys | _struct_keys(raw, keys)):
         return _read_and_return_mrscloud_single(path)
 
     # Unknown — return ambiguous with whatever we can infer
@@ -374,8 +464,8 @@ def _try_mat_folder(paths):
         if {'fids', 'txfrq', 'nucleus'}.issubset(out_keys):
             return _read_and_return_fida_folder(paths)
 
-    # MRSCloud: top-level fids + txfrq + Bo + name
-    if {'fids', 'txfrq', 'Bo'}.issubset(keys):
+    # MRSCloud: fids + txfrq + Bo + name, top-level or in the one struct it saves (outA)
+    if {'fids', 'txfrq', 'Bo'}.issubset(keys | _struct_keys(raw, keys)):
         return _read_and_return_mrscloud_folder(paths)
 
     # Still ambiguous — return with partial data from first file
@@ -391,21 +481,22 @@ def _try_mat_folder(paths):
 
 def _try_raw_folder(paths):
     """
-    Folder of .raw files — detect whether MARSS or LCModel format.
-    MARSS .raw has no $SEQPAR block — sw and sf will be missing.
-    LCModel .raw has $SEQPAR with HZPPPM, NUNFIL, DELTAT.
+    Folder of LCModel .raw files.
+    With a $SEQPAR block (HZPPPM, NUNFIL, DELTAT) the file states its spectral width and
+    frequency. Without one (only $NMID, as MARSS writes them) it does not, and they are
+    asked for; the reader is the same either way.
     """
     try:
         from readers.read_lcmodel import read_lcmodel_raw
         r = read_lcmodel_raw(paths[0])
         names = [os.path.splitext(os.path.basename(p))[0] for p in paths]
-        is_marss = r.get('is_marss_raw', False)
+        no_seqpar = r.get('is_marss_raw', False)
 
-        if is_marss:
-            # MARSS .raw — no spectral params in file
+        if no_seqpar:
+            # LCModel .raw without $SEQPAR — no spectral params in file
             return {
                 'status':           'full',
-                'format':           'MARSS .raw',
+                'format':           'LCModel .raw',
                 'ambiguous_options': [],
                 'data': {
                     'sw':    None,
@@ -415,7 +506,8 @@ def _try_raw_folder(paths):
                     'names': names,
                 },
                 'missing': ['sw', 'sf', 'te'],
-                'message': 'MARSS .raw basis functions detected. '
+                'message': 'LCModel .raw basis functions detected, without a $SEQPAR '
+                           'block (MARSS writes them this way too). '
                            'Spectral width and Larmor frequency not stored — '
                            'will be requested on next screen.',
             }
@@ -436,14 +528,7 @@ def _try_raw_folder(paths):
                 'message': 'LCModel .raw basis functions detected.',
             }
     except Exception as ex:
-        return {
-            'status':           'ambiguous',
-            'format':           'LCModel .raw',
-            'ambiguous_options': ['LCModel .raw files', 'MARSS .raw files'],
-            'data':             {},
-            'missing':          [],
-            'message':          f'Folder of .raw files detected (metadata read failed: {ex}).',
-        }
+        return _failed(f"Could not read .raw file: {ex}")
 
 
 def _try_fsLmrs(paths):
@@ -738,7 +823,7 @@ def _try_pyamares(path):
                 'sf'    : None,
                 'n'     : None,
                 'Bo'    : None,
-                # Pass through peak params for write_oxsa
+                # the peaks, for screen 1's peak list (a CSV holds no FIDs to convert)
                 'peak_params': result,
             },
             'missing': [],

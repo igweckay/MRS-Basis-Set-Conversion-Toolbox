@@ -9,10 +9,14 @@ NIfTI-MRS have metabolites along one of the higher dimensions.
 
 Requires: nibabel  (pip install nibabel)
 
+NIfTI-MRS FIDs are the complex conjugate of a basis' own (as FSL-MRS reads them, NAA at
+2.01 ppm): they are conjugated on reading, as write_niftimrs conjugates them on writing.
+
 NIfTI-MRS header JSON extension contains:
     SpectralWidth        - bandwidth in Hz
     TransmitterFrequency - Larmor frequency in MHz
     EchoTime             - echo time in seconds (convert to ms)
+    BasisLinewidth       - linewidth in Hz, a user-defined key BasiC writes
     ResonantNucleus      - '1H'
     dim_5, dim_6, dim_7  - dimension labels (e.g. 'DIM_COIL', 'DIM_USER_0')
 
@@ -76,16 +80,21 @@ def read_niftimrs(path):
 
     sw = float(meta.get('SpectralWidth', 0))
 
-    # SpectrometerFrequency is in Hz — convert to MHz
-    # Stored as array e.g. [123261801.0]
+    # SpectrometerFrequency is in MHz by the standard, stored as an array, e.g. [123.261801].
+    # spec2nii's raw route (BasiC's writer until now, and the sample set) stored Hz, e.g.
+    # [123261801.0]; no 1H frequency is above 10 000 MHz, so a larger value is Hz.
     sf_raw = meta.get('SpectrometerFrequency',
                meta.get('TransmitterFrequency', 0))
     if isinstance(sf_raw, list):
         sf_raw = sf_raw[0]
-    sf = float(sf_raw) / 1e6   # Hz → MHz
+    sf = float(sf_raw)
+    if sf > 1e4:
+        sf /= 1e6   # Hz → MHz
 
     te_s = meta.get('EchoTime', None)
     te   = float(te_s) * 1000.0 if te_s is not None else None
+    lw   = meta.get('BasisLinewidth')                        # a user-defined key: Value, Description
+    lw   = lw.get('Value') if isinstance(lw, dict) else lw
 
     if sw == 0:
         raise RuntimeError(
@@ -103,6 +112,8 @@ def read_niftimrs(path):
     # Squeeze spatial dims (should all be 1 for basis sets)
     # Remaining dims after t are coils/averages/metabolites
     data_squeezed = data.squeeze()   # shape: (n,) or (n, metabs) etc.
+    # NIfTI-MRS FIDs are the complex conjugate of a basis' own (write_niftimrs)
+    data_squeezed = np.conj(data_squeezed)
 
     # Derive name from filename stem (strip _conj suffix if present)
     stem = os.path.splitext(os.path.splitext(os.path.basename(path))[0])[0]
@@ -136,6 +147,7 @@ def read_niftimrs(path):
             'n'      : len(fid),
             'name'   : name,
             'te'     : te,
+            'linewidth': None if lw is None else float(lw),
             'source' : path,
         })
         _log(f"  Loaded: {name}")

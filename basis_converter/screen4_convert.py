@@ -5,6 +5,12 @@ Basis Set Converter — Screen 4: Conversion and output
 Runs the conversion in a background thread so the GUI stays responsive.
 Shows a step-by-step progress list and the output files when done.
 
+Only the main thread calls Tk. The output folder is asked before the thread
+starts; the thread puts its steps, and the end of the conversion, on a queue
+that the main thread empties every POLL_MS while the conversion runs. (A
+tkinter that takes Tcl for unthreaded, as 3.11 and 3.12 do with Tcl 9, would
+run a call from the thread as it comes and corrupt Tcl or hang.)
+
 State read by this screen:
     state['files']          : list of input file paths
     state['detected_format']: input format string
@@ -13,6 +19,7 @@ State read by this screen:
     state['output_tool']    : e.g. 'LCModel'
     state['output_tool_id'] : e.g. 'lcmodel'
     state['output_format']  : e.g. 'both' | 'raw' | 'default'
+    state['add_mm']         : Osprey only: add Osprey's MM and lipids (False if not set)
     state['params']         : user-supplied parameter overrides
 
 State written by this screen:
@@ -20,11 +27,29 @@ State written by this screen:
 """
 
 import os
+import queue
+import subprocess
+import sys
 import tkinter as tk
 from tkinter import ttk, filedialog
 import threading
+import traceback
 
 from base_screen import BaseScreen
+
+
+
+def open_folder(path):
+    """Show the folder in the system's file browser."""
+    if sys.platform == 'win32':
+        os.startfile(path)
+    elif sys.platform == 'darwin':
+        subprocess.Popen(['open', path])
+    else:
+        subprocess.Popen(['xdg-open', path])
+
+
+POLL_MS = 50   # how often the main thread takes the conversion thread's updates
 
 
 class Screen4Convert(BaseScreen):
@@ -68,11 +93,13 @@ class Screen4Convert(BaseScreen):
         self._status       = 'idle'
         self._steps_done   = []
         self._output_paths = []
+        self.new_btn.config(bg="#e5e7eb", fg="#9ca3af", state="disabled", cursor="")
+        self.back_btn.config(state="disabled", cursor="")
         self._build_context_bar()
         self._build_progress_area()
-        # Start conversion in background thread
-        thread = threading.Thread(target=self._run_conversion, daemon=True)
-        thread.start()
+        # Once the screen is up: ask for the output folder, then convert in a background thread
+        self._updates = queue.Queue()
+        self.after(0, self._start_conversion, self._updates)
 
     #################### Context bar ####################
 
@@ -314,7 +341,7 @@ class Screen4Convert(BaseScreen):
         tk.Button(
             actions,
             text="📁  Open output folder",
-            command=lambda: os.system(f"open '{outdir}'"),
+            command=lambda: open_folder(outdir),
             relief="flat", bg="#dbeafe", fg="#1d4ed8",
             padx=12, pady=5, cursor="hand2"
         ).pack(side="left", padx=(0, 8))
@@ -332,49 +359,67 @@ class Screen4Convert(BaseScreen):
 
     #################### Conversion logic #################### 
 
-    def _run_conversion(self):
+    def _start_conversion(self, updates):
         """
-        Run the full conversion pipeline in a background thread.
-        Uses self.after() to update the UI safely from the thread.
+        On the main thread: check there are files, ask for the output folder, then start the
+        conversion thread and take its updates. A failure here is shown as one in the thread.
         """
         try:
-            self._convert()
+            if not self.state.get('files'):
+                raise RuntimeError("No input files to convert. "
+                                   "Go back to screen 1 and upload a basis set.")
+            outdir = self._ask_output_folder()
         except Exception as ex:
-            self.after(0, self._set_error, str(ex))
+            traceback.print_exc()
+            self._set_error(str(ex))
+            return
+        self.progress_title.config(text='Converting…')
+        threading.Thread(target=self._run_conversion, args=(outdir, updates), daemon=True).start()
+        self._take_updates(updates)
+
+    def _take_updates(self, updates):
+        """On the main thread: run what the conversion thread queued, until it ends."""
+        while True:
+            try:
+                func, args = updates.get_nowait()
+            except queue.Empty:
+                break
+            func(*args)
+            if func in (self._set_done, self._set_error):
+                return
+        if updates is self._updates:        # not if the screen was shown again since
+            self.after(POLL_MS, self._take_updates, updates)
+
+    def _run_conversion(self, outdir, updates):
+        """
+        Run the full conversion pipeline in a background thread.
+        It never calls Tk: its steps and its end go on the queue the main thread takes.
+        A failure shows its message in the window and prints its traceback to stderr.
+        """
+        try:
+            output_paths = self._convert(outdir)
+        except Exception as ex:
+            traceback.print_exc()
+            updates.put((self._set_error, (str(ex),)))
+        else:
+            updates.put((self._set_done, (output_paths,)))
 
     def _step(self, text, sub=None):
-        """Add a step to the UI from the background thread."""
-        self.after(0, self._add_step, text, 'done', sub)
+        """Add a step to the UI from the background thread, through the queue."""
+        self._updates.put((self._add_step, (text, 'done', sub)))
 
-    def _convert(self):
-        """Main conversion pipeline."""
+    def _convert(self, outdir):
+        """Main conversion pipeline, into outdir. Returns the paths written."""
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))))
 
         files    = self.state.get('files', [])
         fmt      = self.state.get('detected_format', '')
-        core     = self.state.get('core', {})
         tool_id  = self.state.get('output_tool_id', '')
         out_fmt  = self.state.get('output_format', 'default')
 
-        #################### Ask user for output folder #################### 
-        outdir = self.after(0, self._ask_output_folder)
-        # Since filedialog must run on main thread, use a synchronized approach
-        outdir_holder = [None]
-        done_event    = threading.Event()
-
-        def ask():
-            d = filedialog.askdirectory(title="Select output folder")
-            outdir_holder[0] = d or os.path.expanduser("~/Desktop/basis_output")
-            done_event.set()
-
-        self.after(0, ask)
-        done_event.wait()
-        outdir = outdir_holder[0]
         os.makedirs(outdir, exist_ok=True)
-
-        self.after(0, self.progress_title.config, {'text': 'Converting…'})
 
         ##################### Step 1: Load all basis functions #################### 
         self._step("Loading input files", sub=fmt)
@@ -389,11 +434,8 @@ class Screen4Convert(BaseScreen):
         params = self.state.get('params', {})
         if params:
             self._step("Applying user parameters")
-            for core_item in basis_list:
-                for key, val in params.items():
-                    # Overwrite if missing OR if currently None
-                    if val and (key not in core_item or core_item[key] is None):
-                        core_item[key] = val
+            from core.load import fill_missing
+            fill_missing(basis_list, params)
 
         #################### Step 3: Run writer #################### 
         self._step(f"Writing {self.state.get('output_tool', '')} format",
@@ -402,223 +444,31 @@ class Screen4Convert(BaseScreen):
         output_paths = self._write(basis_list, tool_id, out_fmt, outdir)
 
         self._step("Done", sub=f"Output: {outdir}")
-
-        ####################  Show output #################### 
-        self.after(0, self._set_done, output_paths)
+        return output_paths
 
     def _load_basis(self, files, fmt):
         """Load basis functions using the appropriate reader."""
-        if 'MARSS .mat' in fmt:
-            from readers.read_marss import read_marss_file, read_marss_folder
-            if len(files) == 1:
-                return [read_marss_file(files[0])]
-            return [read_marss_file(f) for f in files
-                    if f.lower().endswith('.mat')]
-
-        if 'LCModel .BASIS' in fmt:
-            from readers.read_lcmodel import read_lcmodel_basis
-            return read_lcmodel_basis(files[0])
-
-        if 'LCModel .raw' in fmt or 'MARSS .raw' in fmt:
-            from readers.read_lcmodel import read_lcmodel_raw
-            return [read_lcmodel_raw(f) for f in files
-                    if f.lower().endswith('.raw')]
-
-        if 'Osprey' in fmt:
-            from readers.read_osprey import read_osprey
-            return read_osprey(files[0])
-
-        if 'FSL-MRS' in fmt:
-            from readers.read_fsLmrs import read_fsLmrs_file
-            return [read_fsLmrs_file(f) for f in files
-                    if f.lower().endswith('.json')]
-
-        if 'INSPECTOR' in fmt:
-            from readers.read_inspector import read_inspector
-            return read_inspector(files[0])
-
-        if 'jMRUI' in fmt:
-            from readers.read_jmrui import read_jmrui_file
-            return [read_jmrui_file(f) for f in files
-                    if f.lower().endswith('.txt')]
-
-        if 'NIfTI-MRS' in fmt:
-            from readers.read_niftimrs import read_niftimrs
-            results = []
-            for f in files:
-                if f.lower().endswith('.nii.gz'):
-                    results.extend(read_niftimrs(f))
-            return results
-
-        if 'ProFit' in fmt:
-            from readers.read_profit import read_profit
-            return read_profit(files[0])
-
-        if 'MRSCloud' in fmt:
-            from readers.read_mrscloud import read_mrscloud_file
-            return [read_mrscloud_file(f) for f in files
-                    if f.lower().endswith('.mat')]
-
-        if 'FID-A' in fmt:
-            from readers.read_fida import read_fida_file
-            return [read_fida_file(f) for f in files
-                    if f.lower().endswith('.mat')]
-
-        if 'PyAMARES' in fmt:
-            from readers.read_pyamares import read_pyamares
-            # PyAMARES CSV doesn't contain FIDs — can only convert to OXSA
-            raise RuntimeError(
-                "PyAMARES CSV contains prior knowledge only, not FIDs. "
-                "Cannot convert to FID-based formats."
-            )
-
-        if 'SpinWizard' in fmt:
-            from readers.read_spinwizard import read_spinwizard_file, read_spinwizard_folder
-            sw = self.state.get('core', {}).get('sw') or                  self.state.get('params', {}).get('sw')
-            sf = self.state.get('core', {}).get('sf') or                  self.state.get('params', {}).get('sf')
-            if len(files) == 1:
-                return [read_spinwizard_file(files[0], sw=sw, sf=sf)]
-            return read_spinwizard_folder(os.path.dirname(files[0]), sw=sw, sf=sf)
-
-        if 'MIDAS' in fmt:
-            from readers.read_midas import read_midas
-            return read_midas(files[0])
-
-        if 'GAVA' in fmt:
-            from readers.read_gava import read_gava
-            return read_gava(files[0])
-
-        raise RuntimeError(f"No reader available for format: {fmt}")
+        from core.load import load_basis
+        sw = self.state.get('core', {}).get('sw') or \
+             self.state.get('params', {}).get('sw')
+        sf = self.state.get('core', {}).get('sf') or \
+             self.state.get('params', {}).get('sf')
+        return load_basis(files, fmt, sw=sw, sf=sf)
 
     def _write(self, basis_list, tool_id, out_fmt, outdir):
         """Run the appropriate writer."""
+        from core.write import write_basis
         te  = self.state.get('core', {}).get('te') or \
-              self.state.get('params', {}).get('te') or 30.0
+              self.state.get('params', {}).get('te')
         seq = self.state.get('core', {}).get('seq') or \
-              self.state.get('params', {}).get('seq') or 'unedited'
-
-        if tool_id == 'lcmodel':
-            from writers.write_lcmodel import write_lcmodel
-            result = write_lcmodel(basis_list, outdir,
-                                   mode=out_fmt if out_fmt in ('raw','basis','both') else 'both',
-                                   te=te, seq=seq)
-            paths = result.get('raw_files', []) + \
-                    ([result['basis_file']] if 'basis_file' in result else [])
-            return paths
-
-        if tool_id in ('spant', 'abfit'):
-            # SPANT uses LCModel .raw format
-            from writers.write_lcmodel import write_lcmodel
-            result = write_lcmodel(basis_list, outdir,
-                                   mode='raw' if out_fmt != 'nifti' else 'raw',
-                                   te=te, seq=seq)
-            if out_fmt == 'nifti':
-                from writers.write_niftimrs import write_niftimrs
-                return write_niftimrs(basis_list, outdir)
-            return result.get('raw_files', [])
-
-        if tool_id == 'tarquin':
-            from writers.write_lcmodel import write_lcmodel
-            result = write_lcmodel(basis_list, outdir, mode='basis', te=te, seq=seq)
-            return [result.get('basis_file', '')]
-
-        if tool_id == 'osprey':
-            from writers.write_osprey import write_osprey
-            out_file = os.path.join(outdir, 'basis.mat')
-            if out_fmt == 'nifti':
-                from writers.write_niftimrs import write_niftimrs
-                return write_niftimrs(basis_list, outdir)
-            if out_fmt == 'basis':
-                from writers.write_lcmodel import write_lcmodel
-                result = write_lcmodel(basis_list, outdir, mode='basis', te=te, seq=seq)
-                return [result.get('basis_file', '')]
-            write_osprey(basis_list, out_file, te=float(te or 30))
-            return [out_file]
-
-        if tool_id == 'fsLmrs':
-            from writers.write_fsLmrs import write_fsLmrs_folder
-            return write_fsLmrs_folder(basis_list, outdir)
-
-        if tool_id == 'inspector':
-            from writers.write_inspector import write_inspector
-            out_file = os.path.join(outdir, 'basis.mat')
-            write_inspector(basis_list, out_file)
-            return [out_file]
-
-        if tool_id in ('jmrui', 'quest', 'nmbscope', 'aqses'):
-            from writers.write_jmrui import write_jmrui_folder
-            return write_jmrui_folder(basis_list, outdir)
-
-        if tool_id == 'niftimrs':
-            from writers.write_niftimrs import write_niftimrs
-            return write_niftimrs(basis_list, outdir)
-
-        if tool_id == 'marss':
-            from writers.write_marss import (write_marss_folder,
-                                              write_marss_combined)
-            from writers.write_lcmodel import write_lcmodel_raw_folder
-            if out_fmt == 'mat_combined':
-                out_file = os.path.join(outdir, 'basis_combined.mat')
-                write_marss_combined(basis_list, out_file)
-                return [out_file]
-            if out_fmt == 'raw':
-                return write_lcmodel_raw_folder(basis_list, outdir)
-            return write_marss_folder(basis_list, outdir)
-
-        if tool_id == 'mrscloud':
-            from writers.write_mrscloud import write_mrscloud_folder
-            return write_mrscloud_folder(basis_list, outdir)
-
-        if tool_id in ('fida', 'fida_fit', 'spinach'):
-            from writers.write_fida import write_fida_folder
-            return write_fida_folder(basis_list, outdir)
-
-        if tool_id == 'pyamares':
-            from writers.write_pyamares import write_pyamares
-            out_file = os.path.join(outdir, 'pyamares_priors.csv')
-            write_pyamares(basis_list, out_file)
-            return [out_file]
-
-        if tool_id == 'oxsa':
-            from writers.write_oxsa import write_oxsa
-            out_file = os.path.join(outdir, 'run_oxsa_amares.m')
-            te = float(self.state.get('core', {}).get('te') or
-                      self.state.get('params', {}).get('te') or 26.0)
-            write_oxsa(basis_list, out_file, seqte=te)
-            return [out_file]
-
-        if tool_id == 'midas':
-            from writers.write_midas import write_midas
-            out_file = os.path.join(outdir, 'midas_priors.xml')
-            write_midas(basis_list, out_file)
-            return [out_file]
-
-        if tool_id == 'gava':
-            from writers.write_gava import write_gava
-            out_file = os.path.join(outdir, 'gava_priors.txt')
-            write_gava(basis_list, out_file)
-            return [out_file]
-
-        if tool_id in ('vespa_analysis', 'vespa_gen2'):
-            from writers.write_vespa import write_vespa
-            out_file = os.path.join(outdir, 'vespa_priors.xml')
-            write_vespa(basis_list, out_file)
-            return [out_file]
-
-        if tool_id in ('jet', 'spinwizard'):
-            from writers.write_spinwizard import write_spinwizard
-            return write_spinwizard(basis_list, outdir)
-
-        if tool_id == 'profit':
-            from writers.write_profit import write_profit
-            out_file = os.path.join(outdir, 'profit_struct.mat')
-            write_profit(basis_list, out_file)
-            return [out_file]
-
-        raise RuntimeError(f"No writer available for tool: {tool_id}")
+              self.state.get('params', {}).get('seq')
+        return write_basis(basis_list, tool_id, out_fmt, outdir, te=te, seq=seq,
+                           add_mm=self.state.get('add_mm', False), progress=self._step)
 
     def _ask_output_folder(self):
-        pass   # placeholder — actual call is in _convert via threading
+        """On the main thread: the folder the user picks, or ~/Desktop/basis_output."""
+        d = filedialog.askdirectory(title="Select output folder")
+        return d or os.path.expanduser("~/Desktop/basis_output")
 
     #################### Footer ####################
 
@@ -629,12 +479,14 @@ class Screen4Convert(BaseScreen):
             fill="x", side="bottom", before=footer
         )
 
-        tk.Button(
+        # Disabled while a conversion runs, so that it is not shown again and started twice
+        self.back_btn = tk.Button(
             footer, text="← Back",
             command=lambda: self.app.show_screen("screen3"),
             relief="flat", bg="#f3f4f6", fg="#374151",
             padx=14, pady=6, cursor="hand2"
-        ).pack(side="left")
+        )
+        self.back_btn.pack(side="left")
 
         self.new_btn = tk.Button(
             footer, text="New conversion →",
@@ -649,15 +501,19 @@ class Screen4Convert(BaseScreen):
             bg="#dbeafe", fg="#1d4ed8",
             state="normal", cursor="hand2"
         )
+        self.back_btn.config(state="normal", cursor="hand2")
 
     def _new_conversion(self):
         """Reset state and go back to screen 1."""
         for key in ['files', 'detected_format', 'detection_status',
                     'core', 'missing_fields', 'ambiguous_options',
                     'compatible_tools', 'format_confirmed',
+                    'uploaded_files', 'basis_sets', 'set_picked',
                     'output_tool', 'output_tool_id', 'output_format',
-                    'output_path', 'params']:
+                    'add_mm', 'output_path', 'params']:
             self.state.pop(key, None)
+        self.app.screens["screen1"].reset()
+        self.app.screens["screen2"].reset()
         self.app.show_screen("screen1")
 
     #################### Utilities ##############################

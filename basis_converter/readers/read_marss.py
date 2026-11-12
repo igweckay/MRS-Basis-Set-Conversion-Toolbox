@@ -113,12 +113,6 @@ def read_marss_file(path):
             ppm_calib = float(np.asarray(e2.ppmCalib).squeeze())
     except Exception:
         pass
-    if ppm_calib is None:
-        try:
-            if isinstance(expt_dat, dict) and 'ppmCalib' in expt_dat:
-                ppm_calib = float(np.asarray(expt_dat['ppmCalib']).squeeze())
-        except Exception:
-            pass
 
     return {
         'fid'      : fid,

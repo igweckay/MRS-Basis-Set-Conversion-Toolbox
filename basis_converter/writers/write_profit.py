@@ -25,6 +25,12 @@ import os
 import numpy as np
 import scipy.io as sio
 
+if __name__ == '__main__':                    # run as a script: find the writers package
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from writers.centre import fid_at_centre
+
 
 PROTON_GAMMA = 42.57747892e6   # Hz/T  (confirmed from make_profit_basis_set_kci.m)
 
@@ -59,7 +65,7 @@ def write_profit(basis_list, outpath):
 
     for k, core in enumerate(basis_list):
         name = str(core.get('name', f'Metab_{k+1:02d}'))
-        fid  = np.asarray(core['fid']).ravel().astype(complex)
+        fid  = fid_at_centre(core).astype(complex)   # ProFit states no ppm centre: read at 4.65
 
         # ProFit expects 1 x n row vector
         fid_cells[0, k] = fid.reshape(1, -1)
@@ -98,8 +104,6 @@ def write_profit(basis_list, outpath):
 
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     if len(sys.argv) < 3:
         print("Usage: python write_profit.py <input_folder> <output_file>")
         sys.exit(1)

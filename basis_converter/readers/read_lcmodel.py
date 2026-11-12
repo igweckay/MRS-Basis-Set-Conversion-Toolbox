@@ -11,8 +11,9 @@ into the core struct format.
     For each metabolite:
         $NMUSED block  — FILRAW, fitting params (ignored)
         $BASIS block   — ID, METABO, CONC, TRAMP, VOLUME, ISHIFT
-        spectrum data  — real/imag pairs, FORTRAN format: the FFT of the
-                         FID zero-filled to NDATAB (twice its length)
+        spectrum data  — real/imag pairs, FORTRAN format: the FFT of the FID,
+                         zero-filled to NDATAB (twice its length) by LCModel's
+                         makebasis, not by Osprey's and MRSCloud's exports
 
 .raw file structure:
     $SEQPAR block  — HZPPPM, NUNFIL, DELTAT
@@ -90,7 +91,9 @@ def read_lcmodel_basis(path):
     hzpppm  = float(seqpar.get('HZPPPM', 0))
     deltat  = float(seqpar.get('DELTAT', 0)) or float(seqpar.get('BADELT', 0))
     echot   = float(seqpar.get('ECHOT',  0)) or None
-    seq     = seqpar.get('SEQ', '').strip("'\" ")
+    seq     = _restore_name(seqpar.get('SEQ', '').strip("'\" "))
+    # FWHMBA is the basis' linewidth in ppm (-1 where unknown); kept as stated, and in Hz
+    fwhmba  = float(seqpar['FWHMBA']) if seqpar.get('FWHMBA') else None
 
     ############## Parse $BASIS1 block #############
     basis1  = _parse_namelist(text, 'BASIS1')
@@ -138,9 +141,16 @@ def read_lcmodel_basis(path):
             _log(f"  WARNING: could not parse FID for {metabo} — skipping")
             continue
 
-        # The data block is the spectrum: back to the FID (first half of the inverse FFT,
-        # the rest is zero-filling), imaginary sign flipped as for .raw files
-        fid = np.conj(np.fft.ifft(spec, norm='ortho')[:len(spec) // 2])
+        # The data block is the spectrum: back to the FID, imaginary sign flipped as for .raw
+        # files. LCModel's makebasis zero-fills the FID to twice its length before the FFT, so
+        # the second half of the inverse FFT is nothing (its energy is 1e-10 of the whole for
+        # the 5 digits a .BASIS keeps) and is dropped; Osprey's and MRSCloud's exports do not
+        # zero-fill, and the whole FID is kept.
+        fid = np.fft.ifft(spec, norm='ortho')
+        tail = fid[len(fid) // 2:]
+        if np.vdot(tail, tail).real <= 1e-8 * np.vdot(fid, fid).real:
+            fid = fid[:len(fid) // 2]
+        fid = np.conj(fid)
 
         results.append({
             'fid'    : fid,
@@ -150,6 +160,8 @@ def read_lcmodel_basis(path):
             'name'   : metabo,
             'te'     : echot,
             'seq'    : seq if seq else None,
+            'linewidth': fwhmba * hzpppm if fwhmba and fwhmba > 0 else None,
+            'fwhmba' : fwhmba,
             'source' : path,
         })
         _log(f"  Loaded: {metabo}")
@@ -192,8 +204,7 @@ def read_lcmodel_raw(path, name=None, sw=None, sf=None):
     hzpppm  = float(seqpar.get('HZPPPM', 0))
     nunfil  = int(float(seqpar.get('NUNFIL', 0)))
     deltat  = float(seqpar.get('DELTAT', 0))
-
-    sw = round(1.0 / deltat) if deltat > 0 else 0.0
+    echot   = float(seqpar['ECHOT']) if seqpar.get('ECHOT') else None
 
     ############## Find FID data after last $END #############
     last_end = text.upper().rfind('$END')
@@ -227,7 +238,7 @@ def read_lcmodel_raw(path, name=None, sw=None, sf=None):
         'sf'           : sf_out,
         'n'            : len(fid),
         'name'         : name,
-        'te'           : None,
+        'te'           : echot,
         'seq'          : None,
         'is_marss_raw' : is_marss_raw,
         'source'       : path,
@@ -320,12 +331,13 @@ def _parse_fid_data(data_text, n_expected):
     Handles both 8E13.5 (row) and 2E15.6 (column) FORTRAN formats.
     """
     # Extract all numbers from the data section
-    nums = re.findall(r'[+-]?\d+\.\d+[Ee][+-]?\d+|[+-]?\d+\.\d+', data_text)
+    # Fortran writes -.53122E+02 as well as -0.53122E+02, and D for the exponent
+    nums = re.findall(r'[+-]?(?:\d+\.\d*|\.\d+)(?:[EeDd][+-]?\d+)?', data_text)
 
     if len(nums) < 2:
         return None
 
-    vals = [float(v) for v in nums]
+    vals = [float(v.replace('D', 'E').replace('d', 'e')) for v in nums]
 
     # Pair up real/imag
     n_pairs = len(vals) // 2
